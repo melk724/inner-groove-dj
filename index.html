@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Inner Groove Brewing – DJ Request Night</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap');
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d0d0d; font-family: 'DM Sans', sans-serif; color: #f0f0f0; }
+    :root {
+      --bg:        #0d0d0d;
+      --surface:   #161616;
+      --card:      #1e1e1e;
+      --border:    #2e2e2e;
+      --green:     #6dc135;
+      --green-dim: #4a8a22;
+      --green-glow:rgba(109,193,53,.25);
+      --white:     #ffffff;
+      --muted:     #6b6b6b;
+      --gold:      #f5c842;
+      --red:       #e63946;
+      --text:      #f0f0f0;
+      --font-display: 'Bebas Neue', sans-serif;
+      --font-mono:    'Space Mono', monospace;
+    }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: var(--surface); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    @keyframes pulse-green {
+      0%,100% { text-shadow: 0 0 10px var(--green), 0 0 30px var(--green-dim); }
+      50%      { text-shadow: 0 0 4px var(--green-dim); }
+    }
+    @keyframes slide-up {
+      from { opacity:0; transform:translateY(14px); }
+      to   { opacity:1; transform:translateY(0); }
+    }
+    @keyframes ticker {
+      from { transform: translateX(100vw); }
+      to   { transform: translateX(-100%); }
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+
+    const SUPABASE_URL  = "https://gyrfthjhacvoyhfilnjc.supabase.co";
+    const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd5cmZ0aGpoYWN2b3loZmlsbmpjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwMTE1MjMsImV4cCI6MjA4ODU4NzUyM30.cI2df-xYe2X-LzC2L4mrtbuhWasAR7tAEOi9qSY9_rM";
+    const VENMO_HANDLE  = "@InnerGrooveBrewing";
+
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+
+    function sortQueue(q) {
+      const bumped = [...q.filter(s => s.bumped)].sort((a, b) => b.tip - a.tip);
+      return [...bumped, ...q.filter(s => !s.bumped)];
+    }
+
+    async function fetchQueue() {
+      const { data } = await sb.from("dj_queue").select("*").order("created_at", { ascending: true });
+      return data ? sortQueue(data) : [];
+    }
+
+    // ── Patron View ────────────────────────────────────────────────────────────
+    function PatronView({ queue, onRefresh }) {
+      const [step, setStep]     = useState("form");
+      const [song, setSong]     = useState("");
+      const [artist, setArtist] = useState("");
+      const [name, setName]     = useState("");
+      const [tip, setTip]       = useState("");
+      const [bump, setBump]     = useState(false);
+      const [error, setError]   = useState("");
+      const [saving, setSaving] = useState(false);
+
+      const TIP_PRESETS = [0, 2, 5, 10];
+      const tipAmt = parseFloat(tip) || 0;
+
+      function handleSubmit() {
+        if (!song.trim()) { setError("Song title is required."); return; }
+        if (!name.trim()) { setError("Your name is required."); return; }
+        setError(""); setStep("confirm");
+      }
+
+      async function handleConfirm() {
+        setSaving(true);
+        const { error: err } = await sb.from("dj_queue").insert({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          song: song.trim(), artist: artist.trim(),
+          name: name.trim(), tip: tipAmt, bumped: bump,
+        });
+        setSaving(false);
+        if (err) { setError("Something went wrong. Try again."); setStep("form"); return; }
+        await onRefresh();
+        setStep("venmo");
+      }
+
+      const inp = {
+        background:"var(--surface)", border:"1px solid var(--border)",
+        borderRadius:8, padding:"12px 16px", color:"var(--text)",
+        fontSize:16, width:"100%", outline:"none",
+        fontFamily:"'DM Sans', sans-serif",
+      };
+
+      if (step === "venmo") return (
+        <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:32, textAlign:"center" }}>
+          <div style={{ fontFamily:"var(--font-display)", fontSize:52, color:"var(--green)", letterSpacing:6, animation:"pulse-green 3s ease-in-out infinite", lineHeight:1 }}>INNER GROOVE</div>
+          <div style={{ fontFamily:"var(--font-display)", fontSize:28, color:"var(--green-dim)", letterSpacing:8, marginBottom:24 }}>BREWING</div>
+          <div style={{ fontSize:56, marginBottom:16 }}>🎉</div>
+          <h2 style={{ fontFamily:"var(--font-display)", fontSize:40, color:"var(--green)", letterSpacing:3, marginBottom:8 }}>REQUEST SUBMITTED!</h2>
+          <p style={{ color:"var(--muted)", marginBottom:32, lineHeight:1.6, maxWidth:320 }}>
+            <strong style={{ color:"var(--text)" }}>{song}</strong> is in the queue.
+            {tipAmt > 0 && <> Send <strong style={{ color:"var(--gold)" }}>${tipAmt.toFixed(2)}</strong> to lock in your {bump ? "line jump" : "tip"}!</>}
+          </p>
+          {tipAmt > 0 && (
+            <a href={`https://venmo.com/${VENMO_HANDLE}?txn=pay&amount=${tipAmt.toFixed(2)}&note=DJ+Tip+for+${encodeURIComponent(song)}`}
+              target="_blank" rel="noreferrer"
+              style={{ display:"block", width:"100%", maxWidth:320, background:"#3d95ce", color:"#fff", fontWeight:700, fontSize:18, padding:"16px 24px", borderRadius:12, textDecoration:"none", marginBottom:16 }}>
+              Open Venmo → Pay {VENMO_HANDLE}
+            </a>
+          )}
+          <button onClick={() => { setSong(""); setArtist(""); setName(""); setTip(""); setBump(false); setStep("form"); }}
+            style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:8, padding:"10px 24px", cursor:"pointer", fontSize:14 }}>
+            Submit another request
+          </button>
+        </div>
+      );
+
+      if (step === "confirm") return (
+        <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:24 }}>
+          <div style={{ width:"100%", maxWidth:420, animation:"slide-up .3s ease" }}>
+            <h2 style={{ fontFamily:"var(--font-display)", fontSize:40, color:"var(--green)", letterSpacing:3, marginBottom:24, textAlign:"center" }}>CONFIRM REQUEST</h2>
+            <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:16, padding:24, marginBottom:24 }}>
+              {[["Song",song],["Artist",artist||"—"],["Your Name",name],["Tip Amount",tipAmt>0?`$${tipAmt.toFixed(2)}`:"No tip"],["Jump the Line?",bump?"✅ Yes":"No"]].map(([k,v]) => (
+                <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"10px 0", borderBottom:"1px solid var(--border)" }}>
+                  <span style={{ color:"var(--muted)", fontSize:14 }}>{k}</span>
+                  <span style={{ fontWeight:600, color:k==="Tip Amount"?"var(--gold)":"var(--text)" }}>{v}</span>
+                </div>
+              ))}
+            </div>
+            {tipAmt > 0 && <p style={{ color:"var(--muted)", fontSize:13, textAlign:"center", marginBottom:20, lineHeight:1.5 }}>After confirming you'll be redirected to Venmo. Honor system — thanks for keeping it real! 🤘</p>}
+            <div style={{ display:"flex", gap:12 }}>
+              <button onClick={() => setStep("form")} style={{ flex:1, background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:10, padding:14, cursor:"pointer", fontSize:15 }}>← Back</button>
+              <button onClick={handleConfirm} disabled={saving}
+                style={{ flex:2, background:"var(--green)", color:"#0d0d0d", borderRadius:10, padding:14, cursor:"pointer", fontSize:16, fontWeight:700, border:"none", opacity:saving?0.7:1 }}>
+                {saving ? "Submitting…" : "Submit Request 🎵"}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+
+      return (
+        <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", alignItems:"center", padding:"32px 20px" }}>
+          <div style={{ textAlign:"center", marginBottom:28 }}>
+            <div style={{ fontFamily:"var(--font-display)", fontSize:56, color:"var(--green)", letterSpacing:5, animation:"pulse-green 3s ease-in-out infinite", lineHeight:1 }}>INNER GROOVE</div>
+            <div style={{ fontFamily:"var(--font-display)", fontSize:30, color:"var(--green-dim)", letterSpacing:8, marginTop:2, marginBottom:6 }}>BREWING</div>
+            <div style={{ fontFamily:"var(--font-display)", fontSize:14, color:"var(--muted)", letterSpacing:6 }}>DJ REQUEST NIGHT</div>
+          </div>
+          <div style={{ width:"100%", maxWidth:420, display:"flex", flexDirection:"column", gap:16 }}>
+            <div>
+              <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Song Title *</label>
+              <input value={song} onChange={e => setSong(e.target.value)} placeholder="Bohemian Rhapsody" style={inp} />
+            </div>
+            <div>
+              <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Artist</label>
+              <input value={artist} onChange={e => setArtist(e.target.value)} placeholder="Queen" style={inp} />
+            </div>
+            <div>
+              <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Your Name *</label>
+              <input value={name} onChange={e => setName(e.target.value)} placeholder="Taylor" style={inp} />
+            </div>
+            <div>
+              <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Tip Amount</label>
+              <div style={{ display:"flex", gap:8, marginBottom:8 }}>
+                {TIP_PRESETS.map(p => (
+                  <button key={p} onClick={() => setTip(p===0?"":String(p))}
+                    style={{
+                      flex:1, padding:"10px 0", borderRadius:8, cursor:"pointer", fontSize:14, fontWeight:600,
+                      border:`1px solid ${(parseFloat(tip)||0)===p?"var(--green)":"var(--border)"}`,
+                      background:(parseFloat(tip)||0)===p?"rgba(109,193,53,.15)":"var(--surface)",
+                      color:(parseFloat(tip)||0)===p?"var(--green)":"var(--muted)",
+                    }}>{p===0?"No tip":`$${p}`}</button>
+                ))}
+              </div>
+              <input type="number" min="0" step="0.50" value={tip} onChange={e => setTip(e.target.value)}
+                placeholder="or enter custom amount" style={{ ...inp, fontSize:15 }} />
+            </div>
+            {tipAmt > 0 && (
+              <div onClick={() => setBump(!bump)}
+                style={{
+                  background:bump?"rgba(109,193,53,.1)":"var(--surface)",
+                  border:`1px solid ${bump?"var(--green)":"var(--border)"}`,
+                  borderRadius:12, padding:"16px 20px", cursor:"pointer",
+                  display:"flex", alignItems:"center", justifyContent:"space-between",
+                }}>
+                <div>
+                  <div style={{ fontWeight:600, fontSize:15, color:bump?"var(--green)":"var(--text)" }}>⚡ Jump the Line</div>
+                  <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>Use your tip to move up in the queue</div>
+                </div>
+                <div style={{
+                  width:24, height:24, borderRadius:"50%",
+                  border:`2px solid ${bump?"var(--green)":"var(--border)"}`,
+                  background:bump?"var(--green)":"transparent",
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                }}>{bump && <span style={{ fontSize:12, color:"#0d0d0d" }}>✓</span>}</div>
+              </div>
+            )}
+            {error && <div style={{ color:"var(--red)", fontSize:13, padding:"8px 12px", background:"rgba(230,57,70,.1)", borderRadius:8, border:"1px solid rgba(230,57,70,.3)" }}>{error}</div>}
+            <button onClick={handleSubmit}
+              style={{
+                background:"var(--green)", color:"#0d0d0d", border:"none",
+                borderRadius:12, padding:18, fontSize:18, fontWeight:700,
+                cursor:"pointer", fontFamily:"var(--font-display)", letterSpacing:3,
+                marginTop:8, boxShadow:"0 0 28px rgba(109,193,53,.35)",
+              }}>
+              PREVIEW REQUEST →
+            </button>
+            {queue.length > 0 && (
+              <div style={{ marginTop:8 }}>
+                <div style={{ fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", fontFamily:"var(--font-mono)", marginBottom:10 }}>Current Queue ({queue.length})</div>
+                {queue.slice(0,4).map((s,i) => (
+                  <div key={s.id} style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
+                    <span style={{ fontFamily:"var(--font-mono)", fontSize:12, color:i===0?"var(--green)":"var(--muted)", minWidth:20 }}>{i+1}</span>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:14, fontWeight:500, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.song}</div>
+                      <div style={{ fontSize:12, color:"var(--muted)" }}>{s.name}{s.artist?` · ${s.artist}`:""}</div>
+                    </div>
+                    {s.bumped && <span style={{ fontSize:10, color:"var(--green)", border:"1px solid var(--green)", borderRadius:4, padding:"2px 6px", fontFamily:"var(--font-mono)" }}>BUMP</span>}
+                  </div>
+                ))}
+                {queue.length > 4 && <div style={{ fontSize:12, color:"var(--muted)", textAlign:"center", padding:"8px 0" }}>+{queue.length-4} more</div>}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Display View ───────────────────────────────────────────────────────────
+    function DisplayView({ queue }) {
+      const [time, setTime] = useState(new Date());
+      useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
+      const timeStr = time.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
+
+      return (
+        <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", overflow:"hidden", position:"relative" }}>
+          <div style={{ position:"fixed", inset:0, pointerEvents:"none", backgroundImage:"linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px)", backgroundSize:"60px 60px", opacity:.18 }} />
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"20px 48px", borderBottom:"2px solid var(--border)", background:"rgba(13,13,13,.9)", backdropFilter:"blur(10px)", position:"relative", zIndex:1 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:24 }}>
+              <div style={{ borderLeft:"3px solid var(--green)", paddingLeft:16 }}>
+                <div style={{ fontFamily:"var(--font-display)", fontSize:22, color:"var(--green)", letterSpacing:4, animation:"pulse-green 3s ease-in-out infinite" }}>INNER GROOVE</div>
+                <div style={{ fontFamily:"var(--font-display)", fontSize:14, color:"var(--green-dim)", letterSpacing:6 }}>BREWING</div>
+              </div>
+              <div>
+                <div style={{ fontFamily:"var(--font-display)", fontSize:48, color:"var(--green)", letterSpacing:5, lineHeight:1, animation:"pulse-green 3s ease-in-out infinite" }}>DJ REQUEST NIGHT</div>
+                <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--muted)", letterSpacing:3, marginTop:4 }}>SCAN QR CODE TO REQUEST A SONG</div>
+              </div>
+            </div>
+            <div style={{ textAlign:"right" }}>
+              <div style={{ fontFamily:"var(--font-mono)", fontSize:44, color:"var(--white)", letterSpacing:2 }}>{timeStr}</div>
+              <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--muted)", marginTop:2 }}>{queue.length} SONGS IN QUEUE</div>
+            </div>
+          </div>
+          <div style={{ flex:1, padding:"36px 48px", position:"relative", zIndex:1 }}>
+            {queue.length === 0 ? (
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"50vh", gap:16 }}>
+                <div style={{ fontSize:64 }}>🎵</div>
+                <div style={{ fontFamily:"var(--font-display)", fontSize:36, color:"var(--muted)", letterSpacing:4 }}>NO REQUESTS YET</div>
+                <div style={{ color:"var(--muted)", fontFamily:"var(--font-mono)" }}>Scan the QR code to be first!</div>
+              </div>
+            ) : (
+              <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+                {queue.slice(0,8).map((s,i) => (
+                  <div key={s.id} style={{
+                    display:"flex", alignItems:"center", gap:24,
+                    background:i===0?"rgba(109,193,53,.07)":"var(--card)",
+                    border:`1px solid ${i===0?"rgba(109,193,53,.5)":s.bumped?"rgba(109,193,53,.25)":"var(--border)"}`,
+                    borderRadius:16, padding:"20px 28px", animation:"slide-up .4s ease",
+                  }}>
+                    <div style={{ fontFamily:"var(--font-display)", fontSize:48, lineHeight:1, color:i===0?"var(--green)":"var(--border)", minWidth:60, textAlign:"center" }}>
+                      {i===0?"▶":String(i+1).padStart(2,"0")}
+                    </div>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontFamily:"var(--font-display)", fontSize:i===0?36:28, letterSpacing:2, color:i===0?"var(--green)":"var(--text)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                        {s.song.toUpperCase()}
+                      </div>
+                      <div style={{ fontFamily:"var(--font-mono)", fontSize:14, color:"var(--muted)", marginTop:2 }}>
+                        {s.artist && <span>{s.artist} · </span>}Requested by <span style={{ color:"var(--green)" }}>{s.name}</span>
+                      </div>
+                    </div>
+                    <div>
+                      {i===0 && <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--green)", border:"1px solid var(--green)", borderRadius:6, padding:"4px 12px", letterSpacing:2 }}>UP NEXT</div>}
+                      {i>0 && s.bumped && <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--green-dim)", border:"1px solid var(--green-dim)", borderRadius:6, padding:"4px 10px", letterSpacing:2 }}>⚡ BUMPED</div>}
+                    </div>
+                  </div>
+                ))}
+                {queue.length > 8 && <div style={{ textAlign:"center", fontFamily:"var(--font-mono)", color:"var(--muted)", fontSize:14, padding:"16px 0" }}>+ {queue.length-8} more in queue</div>}
+              </div>
+            )}
+          </div>
+          <div style={{ borderTop:"1px solid var(--border)", background:"rgba(109,193,53,.05)", padding:"12px 0", overflow:"hidden" }}>
+            <div style={{ animation:"ticker 30s linear infinite", whiteSpace:"nowrap", display:"inline-block", fontFamily:"var(--font-mono)", fontSize:13, color:"var(--green)", letterSpacing:2 }}>
+              {Array(4).fill("🎵 SCAN THE QR CODE TO REQUEST A SONG  ·  TIP THE DJ TO JUMP THE LINE  ·  INNER GROOVE BREWING  ·  ").join("")}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Admin View ─────────────────────────────────────────────────────────────
+    function AdminView({ queue, onRefresh }) {
+      const [pin, setPin]     = useState("");
+      const [authed, setAuthed] = useState(false);
+      const ADMIN_PIN = "1234";
+
+      async function markPlayed(id) {
+        await sb.from("dj_queue").delete().eq("id", id);
+        await onRefresh();
+      }
+      async function removeEntry(id) {
+        await sb.from("dj_queue").delete().eq("id", id);
+        await onRefresh();
+      }
+      async function clearAll() {
+        if (!confirm("Clear the entire queue? This cannot be undone.")) return;
+        await sb.from("dj_queue").delete().neq("id", "");
+        await onRefresh();
+      }
+
+      if (!authed) return (
+        <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16 }}>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontFamily:"var(--font-display)", fontSize:48, color:"var(--green)", letterSpacing:5, animation:"pulse-green 3s ease-in-out infinite" }}>INNER GROOVE</div>
+            <div style={{ fontFamily:"var(--font-display)", fontSize:26, color:"var(--green-dim)", letterSpacing:8 }}>BREWING</div>
+          </div>
+          <div style={{ fontFamily:"var(--font-display)", fontSize:36, color:"var(--white)", letterSpacing:4, marginTop:8 }}>DJ CONSOLE</div>
+          <div style={{ color:"var(--muted)", fontFamily:"var(--font-mono)", fontSize:13, marginBottom:8 }}>Enter PIN to continue</div>
+          <input type="password" value={pin} onChange={e => setPin(e.target.value)}
+            onKeyDown={e => e.key==="Enter" && (pin===ADMIN_PIN?setAuthed(true):setPin(""))}
+            placeholder="••••"
+            style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, padding:"14px 20px", color:"var(--text)", fontSize:24, textAlign:"center", width:200, outline:"none", fontFamily:"var(--font-mono)", letterSpacing:6 }} />
+          <button onClick={() => pin===ADMIN_PIN?setAuthed(true):setPin("")}
+            style={{ background:"var(--green)", color:"#0d0d0d", border:"none", borderRadius:8, padding:"12px 32px", cursor:"pointer", fontWeight:700, fontSize:15 }}>
+            Enter
+          </button>
+        </div>
+      );
+
+      return (
+        <div style={{ minHeight:"100vh", background:"var(--bg)", padding:32 }}>
+          <div style={{ maxWidth:640, margin:"0 auto" }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:32 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:16 }}>
+                <div>
+                  <div style={{ fontFamily:"var(--font-display)", fontSize:18, color:"var(--green)", letterSpacing:3 }}>INNER GROOVE</div>
+                  <div style={{ fontFamily:"var(--font-display)", fontSize:14, color:"var(--green-dim)", letterSpacing:3 }}>BREWING</div>
+                </div>
+                <div style={{ fontFamily:"var(--font-display)", fontSize:36, color:"var(--white)", letterSpacing:4 }}>DJ CONSOLE</div>
+              </div>
+              <button onClick={clearAll}
+                style={{ background:"rgba(230,57,70,.1)", border:"1px solid var(--red)", color:"var(--red)", borderRadius:8, padding:"8px 20px", cursor:"pointer", fontSize:13, fontFamily:"var(--font-mono)" }}>
+                CLEAR ALL
+              </button>
+            </div>
+            {queue.length === 0 ? (
+              <div style={{ textAlign:"center", color:"var(--muted)", padding:"60px 0", fontFamily:"var(--font-mono)" }}>Queue is empty</div>
+            ) : (
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                {queue.map((s,i) => (
+                  <div key={s.id} style={{
+                    background:"var(--card)", border:`1px solid ${s.bumped?"rgba(109,193,53,.4)":"var(--border)"}`,
+                    borderRadius:12, padding:"16px 20px", display:"flex", alignItems:"center", gap:16,
+                  }}>
+                    <span style={{ fontFamily:"var(--font-mono)", fontSize:18, color:i===0?"var(--green)":"var(--muted)", minWidth:28 }}>#{i+1}</span>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontWeight:600, fontSize:16, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.song}</div>
+                      <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>
+                        {s.artist && `${s.artist} · `}{s.name}
+                        {s.tip > 0 && <span style={{ color:"var(--gold)", marginLeft:8 }}>💰 ${s.tip.toFixed(2)}{s.bumped?" (BUMP)":""}</span>}
+                      </div>
+                    </div>
+                    <div style={{ display:"flex", gap:8 }}>
+                      <button onClick={() => markPlayed(s.id)}
+                        style={{ background:"rgba(109,193,53,.15)", border:"1px solid var(--green)", color:"var(--green)", borderRadius:6, padding:"6px 14px", cursor:"pointer", fontSize:12, fontFamily:"var(--font-mono)" }}>
+                        ✓ PLAYED
+                      </button>
+                      <button onClick={() => removeEntry(s.id)}
+                        style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:6, padding:"6px 10px", cursor:"pointer", fontSize:12 }}>
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Root App ───────────────────────────────────────────────────────────────
+    function App() {
+      const [queue, setQueue]   = useState([]);
+      const [loaded, setLoaded] = useState(false);
+      const [view, setView]     = useState("patron");
+
+      const refresh = useCallback(async () => {
+        const q = await fetchQueue();
+        setQueue(q);
+      }, []);
+
+      useEffect(() => {
+        refresh().then(() => setLoaded(true));
+      }, []);
+
+      // Realtime subscription
+      useEffect(() => {
+        const channel = sb.channel("dj_queue_changes")
+          .on("postgres_changes", { event:"*", schema:"public", table:"dj_queue" }, () => refresh())
+          .subscribe();
+        return () => sb.removeChannel(channel);
+      }, [refresh]);
+
+      if (!loaded) return (
+        <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+          <div style={{ width:40, height:40, border:"3px solid var(--border)", borderTopColor:"var(--green)", borderRadius:"50%", animation:"spin 1s linear infinite" }} />
+        </div>
+      );
+
+      return (
+        <div style={{ minHeight:"100vh", background:"var(--bg)" }}>
+          <div style={{
+            position:"fixed", bottom:16, left:"50%", transform:"translateX(-50%)",
+            background:"rgba(13,13,13,.95)", border:"1px solid var(--border)",
+            borderRadius:100, padding:"6px 8px", display:"flex", gap:4, zIndex:999,
+            backdropFilter:"blur(10px)", boxShadow:"0 4px 24px rgba(0,0,0,.5)",
+          }}>
+            {[["patron","📱 Patron"],["display","📺 Display"],["admin","🎛️ Admin"]].map(([v,label]) => (
+              <button key={v} onClick={() => setView(v)}
+                style={{
+                  background:view===v?"var(--green)":"transparent",
+                  color:view===v?"#0d0d0d":"var(--muted)",
+                  border:"none", borderRadius:100, padding:"8px 18px",
+                  cursor:"pointer", fontSize:13, fontWeight:600, transition:"all .2s",
+                }}>{label}</button>
+            ))}
+          </div>
+          {view==="patron"  && <PatronView  queue={queue} onRefresh={refresh} />}
+          {view==="display" && <DisplayView queue={queue} />}
+          {view==="admin"   && <AdminView   queue={queue} onRefresh={refresh} />}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
