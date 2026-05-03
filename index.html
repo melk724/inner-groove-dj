@@ -74,6 +74,7 @@
       show_tip_totals_publicly: true,
       min_tip_up: 1,
       min_tip_down: 3,
+      max_requests_per_name: 0, // 0 = unlimited
     };
 
     // Build a payment URL for a given method + amount + note
@@ -366,6 +367,15 @@
           setError(`"${dup.song}" is already in the queue. Tap it below to bump it instead!`);
           return;
         }
+        // Check per-name request cap
+        const cap = Number(settings.max_requests_per_name || 0);
+        if (cap > 0) {
+          const myCount = queue.filter(s => s.name.trim().toLowerCase() === name.trim().toLowerCase()).length;
+          if (myCount >= cap) {
+            setError(`You already have ${myCount} song${myCount===1?"":"s"} in the queue. Limit is ${cap} per person — wait for one to play, or bump an existing song!`);
+            return;
+          }
+        }
         setError(""); setStep("confirm");
       }
 
@@ -649,18 +659,37 @@
     }
 
     // ── Display View ─────────────────────────────────────────────────────────
-    function DisplayView({ queue, settings, charityTotal }) {
+    function DisplayView({ queue, settings, charityTotal, recentPlayed, topTippers }) {
       const [time, setTime] = useState(new Date());
       useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
       const timeStr = time.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
 
-      const tickerText = settings.charity_mode && settings.charity_name
-        ? `🎵 SCAN THE QR CODE TO REQUEST A SONG  ·  TONIGHT BENEFITS ${settings.charity_name.toUpperCase()}  ·  TIP TO JUMP THE LINE  ·  INNER GROOVE BREWING  ·  `
-        : `🎵 SCAN THE QR CODE TO REQUEST A SONG  ·  TIP THE DJ TO JUMP THE LINE  ·  INNER GROOVE BREWING  ·  `;
+      const upNext = queue[0];
+      const restOfQueue = queue.slice(1);
+
+      const upTip = upNext ? (Number(upNext.tips_up || 0) + ((!upNext.tips_up && upNext.bumped) ? Number(upNext.tip || 0) : 0)) : 0;
+      const downTip = upNext ? Number(upNext.tips_down || 0) : 0;
+
+      // Build a single, combined ticker so we don't have two scrolling things competing
+      const tickerParts = [];
+      tickerParts.push("🎵 SCAN THE QR CODE TO REQUEST A SONG");
+      if (settings.charity_mode && settings.charity_name) {
+        tickerParts.push(`💛 TONIGHT BENEFITS ${settings.charity_name.toUpperCase()}`);
+      }
+      tickerParts.push("TIP TO JUMP THE LINE");
+      if (recentPlayed && recentPlayed.length > 0) {
+        const recentStr = recentPlayed.map(s => `${s.song.toUpperCase()}${s.artist ? ` — ${s.artist.toUpperCase()}` : ""}`).join("  ·  ");
+        tickerParts.push(`JUST PLAYED:  ${recentStr}`);
+      }
+      tickerParts.push("INNER GROOVE BREWING");
+      const tickerText = tickerParts.join("  ·  ") + "  ·  ";
 
       return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", overflow:"hidden", position:"relative" }}>
+          {/* Background grid */}
           <div style={{ position:"fixed", inset:0, pointerEvents:"none", backgroundImage:"linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px)", backgroundSize:"60px 60px", opacity:.18 }} />
+
+          {/* Header */}
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"20px 48px", borderBottom:"2px solid var(--border)", background:"rgba(13,13,13,.9)", backdropFilter:"blur(10px)", position:"relative", zIndex:1 }}>
             <div style={{ display:"flex", alignItems:"center", gap:24 }}>
               <div style={{ borderLeft:"3px solid var(--green)", paddingLeft:16 }}>
@@ -678,74 +707,149 @@
                 </div>
               </div>
             </div>
-            <div style={{ textAlign:"right" }}>
-              {settings.charity_mode ? (
-                <>
-                  <div style={{ fontFamily:"var(--font-display)", fontSize:42, color:"var(--gold)", letterSpacing:2, lineHeight:1 }}>
-                    ${Number(charityTotal || 0).toFixed(0)}
-                  </div>
-                  <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--muted)", marginTop:4, letterSpacing:2 }}>RAISED · {timeStr}</div>
-                </>
-              ) : (
-                <>
-                  <div style={{ fontFamily:"var(--font-mono)", fontSize:44, color:"var(--white)", letterSpacing:2 }}>{timeStr}</div>
-                  <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--muted)", marginTop:2 }}>{queue.length} SONGS IN QUEUE</div>
-                </>
+            <div style={{ display:"flex", gap:24, alignItems:"center" }}>
+              {/* Top Tippers (only if we have any) */}
+              {topTippers && topTippers.length > 0 && (
+                <div style={{ background:"rgba(245,200,66,.06)", border:"1px solid rgba(245,200,66,.3)", borderRadius:12, padding:"10px 16px", minWidth:180 }}>
+                  <div style={{ fontFamily:"var(--font-mono)", fontSize:10, color:"var(--gold)", letterSpacing:2, marginBottom:6 }}>🏆 TOP TIPPERS</div>
+                  {topTippers.slice(0, 3).map((t, i) => (
+                    <div key={t.name + i} style={{ display:"flex", justifyContent:"space-between", gap:12, fontFamily:"var(--font-mono)", fontSize:13, lineHeight:1.5 }}>
+                      <span style={{ color: i===0?"var(--gold)":"var(--text)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:120 }}>
+                        {i===0?"👑 ":""}{t.name}
+                      </span>
+                      <span style={{ color:"var(--gold)", fontWeight:700 }}>${t.total.toFixed(0)}</span>
+                    </div>
+                  ))}
+                </div>
               )}
+              <div style={{ textAlign:"right" }}>
+                {settings.charity_mode ? (
+                  <>
+                    <div style={{ fontFamily:"var(--font-display)", fontSize:42, color:"var(--gold)", letterSpacing:2, lineHeight:1 }}>
+                      ${Number(charityTotal || 0).toFixed(0)}
+                    </div>
+                    <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--muted)", marginTop:4, letterSpacing:2 }}>RAISED · {timeStr}</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontFamily:"var(--font-mono)", fontSize:44, color:"var(--white)", letterSpacing:2 }}>{timeStr}</div>
+                    <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--muted)", marginTop:2 }}>{queue.length} SONGS IN QUEUE</div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
 
-          <div style={{ flex:1, padding:"36px 48px", position:"relative", zIndex:1 }}>
+          {/* Main content area */}
+          <div style={{ flex:1, padding:"32px 48px", position:"relative", zIndex:1, display:"flex", flexDirection:"column", gap:24, minHeight:0 }}>
             {queue.length === 0 ? (
-              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"50vh", gap:16 }}>
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", flex:1, gap:16 }}>
                 <div style={{ fontSize:64 }}>🎵</div>
                 <div style={{ fontFamily:"var(--font-display)", fontSize:36, color:"var(--muted)", letterSpacing:4 }}>NO REQUESTS YET</div>
                 <div style={{ color:"var(--muted)", fontFamily:"var(--font-mono)" }}>Scan the QR code to be first!</div>
               </div>
             ) : (
-              <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-                {queue.slice(0,8).map((s,i) => {
-                  const up = Number(s.tips_up || 0) + ((!s.tips_up && s.bumped) ? Number(s.tip || 0) : 0);
-                  const down = Number(s.tips_down || 0);
-                  const hasMovement = up > 0 || down > 0;
-                  return (
-                    <div key={s.id} style={{
-                      display:"flex", alignItems:"center", gap:24,
-                      background:i===0?"rgba(109,193,53,.07)":"var(--card)",
-                      border:`1px solid ${i===0?"rgba(109,193,53,.5)":hasMovement?"rgba(109,193,53,.25)":"var(--border)"}`,
-                      borderRadius:16, padding:"20px 28px", animation:"slide-up .4s ease",
-                    }}>
-                      <div style={{ fontFamily:"var(--font-display)", fontSize:48, lineHeight:1, color:i===0?"var(--green)":"var(--border)", minWidth:60, textAlign:"center" }}>
-                        {i===0?"▶":String(i+1).padStart(2,"0")}
+              <>
+                {/* HERO UP NEXT CARD */}
+                {upNext && (
+                  <div style={{
+                    background:"linear-gradient(135deg, rgba(109,193,53,.15) 0%, rgba(109,193,53,.04) 100%)",
+                    border:"2px solid var(--green)",
+                    borderRadius:20, padding:"28px 36px",
+                    boxShadow:"0 0 60px rgba(109,193,53,.2)",
+                    display:"flex", alignItems:"center", gap:32,
+                    animation:"slide-up .5s ease",
+                  }}>
+                    <div style={{
+                      fontFamily:"var(--font-display)", fontSize:120, lineHeight:1,
+                      color:"var(--green)", animation:"pulse-green 2s ease-in-out infinite",
+                      textAlign:"center", minWidth:100,
+                    }}>▶</div>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontFamily:"var(--font-mono)", fontSize:13, color:"var(--green)", letterSpacing:4, marginBottom:6 }}>
+                        ▸ UP NEXT
                       </div>
-                      <div style={{ flex:1, minWidth:0 }}>
-                        <div style={{ fontFamily:"var(--font-display)", fontSize:i===0?36:28, letterSpacing:2, color:i===0?"var(--green)":"var(--text)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
-                          {s.song.toUpperCase()}
-                        </div>
-                        <div style={{ fontFamily:"var(--font-mono)", fontSize:14, color:"var(--muted)", marginTop:2 }}>
-                          {s.artist && <span>{s.artist} · </span>}Requested by <span style={{ color:"var(--green)" }}>{s.name}</span>
-                        </div>
+                      <div style={{
+                        fontFamily:"var(--font-display)", fontSize:64, lineHeight:1.05, letterSpacing:3,
+                        color:"var(--white)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis",
+                        textShadow:"0 0 30px rgba(109,193,53,.4)",
+                      }}>
+                        {upNext.song.toUpperCase()}
                       </div>
-                      <div style={{ display:"flex", flexDirection:"column", gap:6, alignItems:"flex-end" }}>
-                        {i===0 && <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--green)", border:"1px solid var(--green)", borderRadius:6, padding:"4px 12px", letterSpacing:2 }}>UP NEXT</div>}
-                        {settings.show_tip_totals_publicly && up > 0 && (
-                          <div style={{ fontFamily:"var(--font-mono)", fontSize:14, color:"var(--green)", letterSpacing:1 }}>↑ ${up.toFixed(2)}</div>
-                        )}
-                        {settings.show_tip_totals_publicly && down > 0 && (
-                          <div style={{ fontFamily:"var(--font-mono)", fontSize:14, color:"var(--red)", letterSpacing:1 }}>↓ ${down.toFixed(2)}</div>
-                        )}
+                      <div style={{ fontFamily:"var(--font-mono)", fontSize:18, color:"var(--muted)", marginTop:8 }}>
+                        {upNext.artist && <span style={{ color:"var(--text)" }}>{upNext.artist}</span>}
+                        {upNext.artist && " · "}
+                        Requested by <span style={{ color:"var(--green)" }}>{upNext.name}</span>
                       </div>
                     </div>
-                  );
-                })}
-                {queue.length > 8 && <div style={{ textAlign:"center", fontFamily:"var(--font-mono)", color:"var(--muted)", fontSize:14, padding:"16px 0" }}>+ {queue.length-8} more in queue</div>}
-              </div>
+                    {settings.show_tip_totals_publicly && (upTip > 0 || downTip > 0) && (
+                      <div style={{ display:"flex", flexDirection:"column", gap:8, alignItems:"flex-end" }}>
+                        {upTip > 0 && (
+                          <div style={{ fontFamily:"var(--font-display)", fontSize:32, color:"var(--green)", letterSpacing:1, lineHeight:1 }}>
+                            ↑ ${upTip.toFixed(0)}
+                          </div>
+                        )}
+                        {downTip > 0 && (
+                          <div style={{ fontFamily:"var(--font-display)", fontSize:24, color:"var(--red)", letterSpacing:1, lineHeight:1 }}>
+                            ↓ ${downTip.toFixed(0)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* COMING UP queue */}
+                {restOfQueue.length > 0 && (
+                  <div style={{ flex:1, minHeight:0, display:"flex", flexDirection:"column" }}>
+                    <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--muted)", letterSpacing:4, marginBottom:12 }}>
+                      ▸ COMING UP
+                    </div>
+                    <div style={{ display:"flex", flexDirection:"column", gap:10, overflow:"hidden" }}>
+                      {restOfQueue.slice(0, 6).map((s, i) => {
+                        const up = Number(s.tips_up || 0) + ((!s.tips_up && s.bumped) ? Number(s.tip || 0) : 0);
+                        const down = Number(s.tips_down || 0);
+                        const hasMovement = up > 0 || down > 0;
+                        return (
+                          <div key={s.id} style={{
+                            display:"flex", alignItems:"center", gap:20,
+                            background:"var(--card)",
+                            border:`1px solid ${hasMovement?"rgba(109,193,53,.25)":"var(--border)"}`,
+                            borderRadius:12, padding:"14px 24px",
+                            animation:"slide-up .4s ease",
+                          }}>
+                            <div style={{ fontFamily:"var(--font-display)", fontSize:32, lineHeight:1, color:"var(--border)", minWidth:50, textAlign:"center" }}>
+                              {String(i+2).padStart(2,"0")}
+                            </div>
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <div style={{ fontFamily:"var(--font-display)", fontSize:24, letterSpacing:2, color:"var(--text)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                                {s.song.toUpperCase()}
+                              </div>
+                              <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--muted)", marginTop:2 }}>
+                                {s.artist && <span>{s.artist} · </span>}<span style={{ color:"var(--green)" }}>{s.name}</span>
+                              </div>
+                            </div>
+                            {settings.show_tip_totals_publicly && (
+                              <div style={{ display:"flex", flexDirection:"column", gap:2, alignItems:"flex-end" }}>
+                                {up > 0   && <div style={{ fontFamily:"var(--font-mono)", fontSize:13, color:"var(--green)" }}>↑ ${up.toFixed(0)}</div>}
+                                {down > 0 && <div style={{ fontFamily:"var(--font-mono)", fontSize:13, color:"var(--red)"   }}>↓ ${down.toFixed(0)}</div>}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {restOfQueue.length > 6 && <div style={{ textAlign:"center", fontFamily:"var(--font-mono)", color:"var(--muted)", fontSize:13, padding:"6px 0" }}>+ {restOfQueue.length-6} more in queue</div>}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
-          <div style={{ borderTop:"1px solid var(--border)", background:"rgba(109,193,53,.05)", padding:"12px 0", overflow:"hidden" }}>
-            <div style={{ animation:"ticker 30s linear infinite", whiteSpace:"nowrap", display:"inline-block", fontFamily:"var(--font-mono)", fontSize:13, color:"var(--green)", letterSpacing:2 }}>
-              {Array(4).fill(tickerText).join("")}
+          {/* Combined ticker (announcements + recently played) */}
+          <div style={{ borderTop:"1px solid var(--border)", background:"rgba(109,193,53,.05)", padding:"12px 0", overflow:"hidden", flexShrink:0 }}>
+            <div style={{ animation:"ticker 60s linear infinite", whiteSpace:"nowrap", display:"inline-block", fontFamily:"var(--font-mono)", fontSize:13, color:"var(--green)", letterSpacing:2 }}>
+              {Array(2).fill(tickerText).join("")}
             </div>
           </div>
         </div>
@@ -819,7 +923,7 @@
 
             {/* Tabs */}
             <div style={{ display:"flex", gap:4, marginBottom:20, background:"var(--surface)", borderRadius:10, padding:4 }}>
-              {[["queue","Queue"],["payments","Payment Methods"],["charity","Charity Mode"],["display","Display"]].map(([v,lbl]) => (
+              {[["queue","Queue"],["payments","Payment Methods"],["charity","Charity Mode"],["display","Display"],["rules","Rules"]].map(([v,lbl]) => (
                 <button key={v} onClick={() => setTab(v)}
                   style={{
                     flex:1, padding:"10px 0", borderRadius:8, border:"none", cursor:"pointer",
@@ -844,6 +948,9 @@
             )}
             {tab === "display" && (
               <DisplayTab settings={settings} onSettingsChange={onSettingsChange} />
+            )}
+            {tab === "rules" && (
+              <RulesTab settings={settings} onSettingsChange={onSettingsChange} />
             )}
           </div>
         </div>
@@ -1159,11 +1266,64 @@
       );
     }
 
+    function RulesTab({ settings, onSettingsChange }) {
+      const [cap, setCap] = useState(settings.max_requests_per_name || 0);
+      const [saving, setSaving] = useState(false);
+      const [savedMsg, setSavedMsg] = useState("");
+
+      async function save() {
+        setSaving(true);
+        const err = await saveSettings({ max_requests_per_name: Number(cap) || 0 });
+        setSaving(false);
+        if (!err) {
+          setSavedMsg("Saved!");
+          await onSettingsChange();
+          setTimeout(() => setSavedMsg(""), 2000);
+        }
+      }
+
+      return (
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:20 }}>
+            <div style={{ fontFamily:"var(--font-display)", fontSize:20, color:"var(--green)", letterSpacing:2, marginBottom:8 }}>REQUEST LIMITS</div>
+            <div style={{ fontSize:13, color:"var(--muted)", marginBottom:16 }}>
+              Stop one person from filling the queue with their requests. Matched by name (case-insensitive). Played songs don't count.
+            </div>
+            <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>
+              Max active requests per name
+            </label>
+            <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+              <input type="number" min="0" step="1" value={cap} onChange={e => setCap(e.target.value)}
+                style={{ background:"var(--surface)", border:"1px solid var(--border)", color:"var(--text)", borderRadius:8, padding:"10px 12px", fontSize:14, width:120, outline:"none" }} />
+              <span style={{ color:"var(--muted)", fontSize:13, fontFamily:"var(--font-mono)" }}>
+                {Number(cap) === 0 ? "(0 = unlimited)" : `(blocks the ${Number(cap)+1==2?"2nd":Number(cap)+1==3?"3rd":`${Number(cap)+1}th`} song from same name)`}
+              </span>
+            </div>
+            <div style={{ marginTop:12, padding:"10px 14px", background:"rgba(109,193,53,.06)", borderLeft:"2px solid var(--green)", borderRadius:4 }}>
+              <div style={{ fontSize:12, color:"var(--muted)", lineHeight:1.5 }}>
+                💡 <strong style={{ color:"var(--text)" }}>Tip:</strong> A cap of 2-3 works well for busy nights. Patrons can still bump existing songs (theirs or anyone's) without hitting the limit.
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display:"flex", gap:12, alignItems:"center" }}>
+            <button onClick={save} disabled={saving}
+              style={{ background:"var(--green)", color:"#0d0d0d", border:"none", borderRadius:10, padding:"14px 28px", fontSize:15, fontWeight:700, cursor:"pointer", opacity:saving?0.6:1 }}>
+              {saving ? "Saving…" : "Save Changes"}
+            </button>
+            {savedMsg && <span style={{ color:"var(--green)", fontFamily:"var(--font-mono)", fontSize:13 }}>{savedMsg}</span>}
+          </div>
+        </div>
+      );
+    }
+
     // ── Root App ─────────────────────────────────────────────────────────────
     function App() {
       const [queue, setQueue]       = useState([]);
       const [settings, setSettings] = useState(DEFAULT_SETTINGS);
       const [charityTotal, setCharityTotal] = useState(0);
+      const [recentPlayed, setRecentPlayed] = useState([]);
+      const [topTippers, setTopTippers] = useState([]);
       const [loaded, setLoaded]     = useState(false);
       const [view, setView]         = useState("patron");
 
@@ -1185,25 +1345,63 @@
         setCharityTotal(total);
       }, []);
 
+      const refreshRecentPlayed = useCallback(async () => {
+        const { data } = await sb.from("dj_queue")
+          .select("id, song, artist, name, played_at")
+          .not("played_at", "is", null)
+          .order("played_at", { ascending: false })
+          .limit(5);
+        setRecentPlayed(data || []);
+      }, []);
+
+      const refreshTopTippers = useCallback(async () => {
+        const { data } = await sb.from("tips").select("amount, tipper_name");
+        if (!data) { setTopTippers([]); return; }
+        // Aggregate by name (case-insensitive). Empty/null names = "Anonymous".
+        const totals = {};
+        for (const t of data) {
+          const raw = (t.tipper_name || "").trim();
+          const key = raw ? raw : "Anonymous";
+          totals[key] = (totals[key] || 0) + Number(t.amount || 0);
+        }
+        const sorted = Object.entries(totals)
+          .map(([name, total]) => ({ name, total }))
+          .sort((a, b) => b.total - a.total)
+          .slice(0, 5);
+        setTopTippers(sorted);
+      }, []);
+
       const refreshAll = useCallback(async () => {
-        await Promise.all([refreshQueue(), refreshSettings(), refreshCharityTotal()]);
-      }, [refreshQueue, refreshSettings, refreshCharityTotal]);
+        await Promise.all([
+          refreshQueue(),
+          refreshSettings(),
+          refreshCharityTotal(),
+          refreshRecentPlayed(),
+          refreshTopTippers(),
+        ]);
+      }, [refreshQueue, refreshSettings, refreshCharityTotal, refreshRecentPlayed, refreshTopTippers]);
 
       useEffect(() => { refreshAll().then(() => setLoaded(true)); }, [refreshAll]);
 
       // Realtime subscriptions
       useEffect(() => {
         const c1 = sb.channel("dj_queue_changes")
-          .on("postgres_changes", { event:"*", schema:"public", table:"dj_queue" }, () => refreshQueue())
+          .on("postgres_changes", { event:"*", schema:"public", table:"dj_queue" }, () => {
+            refreshQueue();
+            refreshRecentPlayed();
+          })
           .subscribe();
         const c2 = sb.channel("settings_changes")
           .on("postgres_changes", { event:"*", schema:"public", table:"settings" }, () => refreshSettings())
           .subscribe();
         const c3 = sb.channel("tips_changes")
-          .on("postgres_changes", { event:"*", schema:"public", table:"tips" }, () => refreshCharityTotal())
+          .on("postgres_changes", { event:"*", schema:"public", table:"tips" }, () => {
+            refreshCharityTotal();
+            refreshTopTippers();
+          })
           .subscribe();
         return () => { sb.removeChannel(c1); sb.removeChannel(c2); sb.removeChannel(c3); };
-      }, [refreshQueue, refreshSettings, refreshCharityTotal]);
+      }, [refreshQueue, refreshSettings, refreshCharityTotal, refreshRecentPlayed, refreshTopTippers]);
 
       if (!loaded) return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -1230,7 +1428,7 @@
             ))}
           </div>
           {view==="patron"  && <PatronView  queue={queue} settings={settings} onRefresh={refreshQueue} />}
-          {view==="display" && <DisplayView queue={queue} settings={settings} charityTotal={charityTotal} />}
+          {view==="display" && <DisplayView queue={queue} settings={settings} charityTotal={charityTotal} recentPlayed={recentPlayed} topTippers={topTippers} />}
           {view==="admin"   && <AdminView   queue={queue} settings={settings} charityTotal={charityTotal} onRefresh={refreshQueue} onSettingsChange={refreshSettings} />}
         </div>
       );
