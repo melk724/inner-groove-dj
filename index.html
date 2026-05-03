@@ -66,7 +66,7 @@
     }
 
     async function fetchQueue() {
-      const { data } = await sb.from("dj_queue").select("*").order("created_at", { ascending: true });
+      const { data } = await sb.from("dj_queue").select("*").order("order_index", { ascending: true }).order("created_at", { ascending: true });
       return data ? sortQueue(data) : [];
     }
 
@@ -92,10 +92,12 @@
 
       async function handleConfirm() {
         setSaving(true);
+        const { data: existing } = await sb.from("dj_queue").select("order_index").order("order_index", { ascending: false }).limit(1);
+        const nextIdx = existing && existing.length > 0 ? (existing[0].order_index || 0) + 1 : 0;
         const { error: err } = await sb.from("dj_queue").insert({
           id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
           song: song.trim(), artist: artist.trim(),
-          name: name.trim(), tip: tipAmt, bumped: bump,
+          name: name.trim(), tip: tipAmt, bumped: bump, order_index: nextIdx,
         });
         setSaving(false);
         if (err) { setError("Something went wrong. Try again."); setStep("form"); return; }
@@ -334,7 +336,7 @@
         if (dragIdx === null) setLocalQueue(queue);
       }, [queue, dragIdx]);
 
-      function handleDrop(toIdx) {
+      async function handleDrop(toIdx) {
         if (dragIdx === null || dragIdx === toIdx) return;
         const reordered = [...localQueue];
         const [moved] = reordered.splice(dragIdx, 1);
@@ -342,6 +344,11 @@
         setLocalQueue(reordered);
         setDragIdx(null);
         setDragOver(null);
+        // Persist new order to Supabase
+        await Promise.all(
+          reordered.map((s, i) => sb.from("dj_queue").update({ order_index: i }).eq("id", s.id))
+        );
+        await onRefresh();
       }
 
       function showToast(entry) {
