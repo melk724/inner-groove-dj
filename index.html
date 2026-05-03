@@ -324,7 +324,25 @@
       const [played, setPlayed]     = useState([]);
       const [toast, setToast]       = useState(null);
       const [showPlayed, setShowPlayed] = useState(false);
+      const [localQueue, setLocalQueue] = useState(queue);
+      const [dragIdx, setDragIdx]   = useState(null);
+      const [dragOver, setDragOver] = useState(null);
       const ADMIN_PIN = "1234";
+
+      // Keep localQueue in sync with incoming queue unless DJ is dragging
+      useEffect(() => {
+        if (dragIdx === null) setLocalQueue(queue);
+      }, [queue, dragIdx]);
+
+      function handleDrop(toIdx) {
+        if (dragIdx === null || dragIdx === toIdx) return;
+        const reordered = [...localQueue];
+        const [moved] = reordered.splice(dragIdx, 1);
+        reordered.splice(toIdx, 0, moved);
+        setLocalQueue(reordered);
+        setDragIdx(null);
+        setDragOver(null);
+      }
 
       function showToast(entry) {
         setToast(entry);
@@ -444,11 +462,22 @@
               <div style={{ textAlign:"center", color:"var(--muted)", padding:"60px 0", fontFamily:"var(--font-mono)" }}>Queue is empty</div>
             ) : (
               <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:32 }}>
-                {queue.map((s,i) => (
-                  <div key={s.id} style={{
-                    background:"var(--card)", border:`1px solid ${s.bumped?"rgba(109,193,53,.4)":"var(--border)"}`,
-                    borderRadius:12, padding:"16px 20px", display:"flex", alignItems:"center", gap:16,
-                  }}>
+                {localQueue.map((s,i) => (
+                  <div key={s.id}
+                    draggable
+                    onDragStart={() => setDragIdx(i)}
+                    onDragOver={e => { e.preventDefault(); setDragOver(i); }}
+                    onDrop={() => handleDrop(i)}
+                    onDragEnd={() => { setDragIdx(null); setDragOver(null); }}
+                    style={{
+                      background:"var(--card)",
+                      border:`1px solid ${dragOver===i && dragIdx!==i?"var(--green)":s.bumped?"rgba(109,193,53,.4)":"var(--border)"}`,
+                      borderRadius:12, padding:"16px 20px", display:"flex", alignItems:"center", gap:16,
+                      cursor:"grab", opacity: dragIdx===i ? 0.4 : 1,
+                      transition:"border-color .15s, opacity .15s",
+                      boxShadow: dragOver===i && dragIdx!==i ? "0 0 0 2px var(--green)" : "none",
+                    }}>
+                    <span style={{ color:"var(--muted)", fontSize:18, userSelect:"none", cursor:"grab" }}>⠿</span>
                     <span style={{ fontFamily:"var(--font-mono)", fontSize:18, color:i===0?"var(--green)":"var(--muted)", minWidth:28 }}>#{i+1}</span>
                     <div style={{ flex:1, minWidth:0 }}>
                       <div style={{ fontWeight:600, fontSize:16, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.song}</div>
