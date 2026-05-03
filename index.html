@@ -47,22 +47,78 @@
       from { transform: rotate(0deg); }
       to   { transform: rotate(360deg); }
     }
+    @keyframes fade-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
   </style>
 </head>
 <body>
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useEffect, useCallback } = React;
+    const { useState, useEffect, useCallback, useMemo } = React;
 
     const SUPABASE_URL  = "https://gyrfthjhacvoyhfilnjc.supabase.co";
     const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd5cmZ0aGpoYWN2b3loZmlsbmpjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwMTE1MjMsImV4cCI6MjA4ODU4NzUyM30.cI2df-xYe2X-LzC2L4mrtbuhWasAR7tAEOi9qSY9_rM";
-    const VENMO_HANDLE  = "@InnerGrooveBrewing";
 
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
+    // ── Defaults if settings row is missing/empty ────────────────────────────
+    const DEFAULT_SETTINGS = {
+      payment_methods: [
+        { id: "venmo-default", type: "venmo", handle: "@InnerGrooveBrewing", label: "Venmo" }
+      ],
+      charity_mode: false,
+      charity_name: "",
+      charity_header: "",
+      show_tip_totals_publicly: true,
+      min_tip_up: 1,
+      min_tip_down: 3,
+    };
+
+    // Build a payment URL for a given method + amount + note
+    function paymentUrl(method, amount, note) {
+      const amt = Number(amount).toFixed(2);
+      const n = encodeURIComponent(note);
+      const h = (method.handle || "").replace(/^[@$]/, "");
+      switch (method.type) {
+        case "venmo":   return `https://venmo.com/${h}?txn=pay&amount=${amt}&note=${n}`;
+        case "cashapp": return `https://cash.app/$${h}/${amt}`;
+        case "paypal":  return `https://paypal.me/${h}/${amt}`;
+        case "zelle":   return `mailto:${h}?subject=${n}&body=Sending%20$${amt}%20via%20Zelle`;
+        case "url":     return method.handle; // arbitrary link, e.g. charity donate page
+        default:        return method.handle || "#";
+      }
+    }
+
+    function paymentColor(type) {
+      switch (type) {
+        case "venmo":   return "#3d95ce";
+        case "cashapp": return "#00d54b";
+        case "paypal":  return "#0070ba";
+        case "zelle":   return "#6d1ed4";
+        case "url":     return "var(--green)";
+        default:        return "var(--green)";
+      }
+    }
+
+    // For an entry, compute its sortable score
+    function score(s) {
+      const up = Number(s.tips_up || 0);
+      const down = Number(s.tips_down || 0);
+      // Honor legacy 'tip'/'bumped' fields for old rows: treat tip as up-tip if bumped
+      const legacyUp = (!s.tips_up && s.bumped) ? Number(s.tip || 0) : 0;
+      return (up + legacyUp) - down;
+    }
+
     function sortQueue(q) {
-      const bumped = [...q.filter(s => s.bumped)].sort((a, b) => b.tip - a.tip);
-      return [...bumped, ...q.filter(s => !s.bumped)];
+      // Active (not yet played) first, sorted by score desc, then created_at asc
+      const active = q.filter(s => !s.played_at);
+      return [...active].sort((a, b) => {
+        const sa = score(a), sb_ = score(b);
+        if (sb_ !== sa) return sb_ - sa;
+        return new Date(a.created_at) - new Date(b.created_at);
+      });
     }
 
     async function fetchQueue() {
@@ -70,37 +126,275 @@
       return data ? sortQueue(data) : [];
     }
 
-    // ── Patron View ────────────────────────────────────────────────────────────
-    function PatronView({ queue, onRefresh }) {
+    async function fetchSettings() {
+      const { data } = await sb.from("settings").select("*").eq("id", 1).maybeSingle();
+      if (!data) return DEFAULT_SETTINGS;
+      return {
+        ...DEFAULT_SETTINGS,
+        ...data,
+        payment_methods: Array.isArray(data.payment_methods) && data.payment_methods.length
+          ? data.payment_methods
+          : DEFAULT_SETTINGS.payment_methods,
+      };
+    }
+
+    async function saveSettings(patch) {
+      const { error } = await sb.from("settings").upsert({ id: 1, ...patch });
+      return error;
+    }
+
+    async function logTip({ song_id, amount, direction, tipper_name, payment_method, cash }) {
+      await sb.from("tips").insert({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        song_id, amount, direction,
+        tipper_name: tipper_name || null,
+        payment_method: payment_method || null,
+        cash: !!cash,
+      });
+    }
+
+    // Atomically bump a song's tips_up or tips_down. Falls back to read-modify-write.
+    async function applyTipToSong(songId, direction, amount) {
+      const col = direction === "up" ? "tips_up" : "tips_down";
+      // Read current, then update
+      const { data: current } = await sb.from("dj_queue").select(col).eq("id", songId).maybeSingle();
+      const cur = Number(current?.[col] || 0);
+      await sb.from("dj_queue").update({ [col]: cur + Number(amount) }).eq("id", songId);
+    }
+
+    // ── Shared: tip modal for an existing queued song ────────────────────────
+    function TipModal({ song, settings, onClose, onComplete }) {
+      const [direction, setDirection] = useState("up");
+      const [amount, setAmount] = useState("");
+      const [tipperName, setTipperName] = useState("");
+      const [methodId, setMethodId] = useState(settings.payment_methods[0]?.id || "");
+      const [cash, setCash] = useState(false);
+      const [saving, setSaving] = useState(false);
+      const [error, setError] = useState("");
+
+      const min = direction === "up" ? Number(settings.min_tip_up || 1) : Number(settings.min_tip_down || 3);
+      const presets = direction === "up" ? [1, 2, 5, 10] : [3, 5, 10, 20];
+      const amt = parseFloat(amount) || 0;
+      const method = settings.payment_methods.find(m => m.id === methodId) || settings.payment_methods[0];
+
+      async function handleSubmit() {
+        if (amt < min) { setError(`Minimum ${direction === "up" ? "bump-up" : "bump-down"} tip is $${min}.`); return; }
+        setError(""); setSaving(true);
+        try {
+          await applyTipToSong(song.id, direction, amt);
+          await logTip({
+            song_id: song.id, amount: amt, direction,
+            tipper_name: tipperName.trim(),
+            payment_method: cash ? "cash" : (method?.type || null),
+            cash,
+          });
+          if (!cash && method) {
+            const note = `${direction === "up" ? "Bump up" : "Bump down"}: ${song.song}`;
+            window.open(paymentUrl(method, amt, note), "_blank");
+          }
+          onComplete();
+        } catch (e) {
+          setError("Something went wrong. Try again.");
+          setSaving(false);
+        }
+      }
+
+      return (
+        <div onClick={onClose} style={{
+          position:"fixed", inset:0, background:"rgba(0,0,0,.75)", zIndex:1000,
+          display:"flex", alignItems:"center", justifyContent:"center", padding:20,
+          animation:"fade-in .2s ease",
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background:"var(--card)", border:"1px solid var(--border)",
+            borderRadius:16, padding:24, width:"100%", maxWidth:420,
+            maxHeight:"90vh", overflowY:"auto", animation:"slide-up .25s ease",
+          }}>
+            <div style={{ marginBottom:16 }}>
+              <div style={{ fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", fontFamily:"var(--font-mono)", marginBottom:6 }}>Tip on this request</div>
+              <div style={{ fontFamily:"var(--font-display)", fontSize:26, color:"var(--green)", letterSpacing:2, lineHeight:1.1 }}>{song.song.toUpperCase()}</div>
+              <div style={{ fontSize:13, color:"var(--muted)", marginTop:4 }}>{song.artist && `${song.artist} · `}requested by {song.name}</div>
+            </div>
+
+            {/* Direction toggle */}
+            <div style={{ display:"flex", gap:8, marginBottom:16, background:"var(--surface)", borderRadius:10, padding:4 }}>
+              {[
+                { v:"up",   lbl:"⬆ BUMP UP",   c:"var(--green)" },
+                { v:"down", lbl:"⬇ BUMP DOWN", c:"var(--red)" },
+              ].map(o => (
+                <button key={o.v} onClick={() => { setDirection(o.v); setAmount(""); setError(""); }}
+                  style={{
+                    flex:1, padding:"10px 0", borderRadius:8, border:"none", cursor:"pointer",
+                    fontFamily:"var(--font-mono)", fontSize:12, letterSpacing:2, fontWeight:700,
+                    background: direction===o.v ? o.c : "transparent",
+                    color:     direction===o.v ? "#0d0d0d" : "var(--muted)",
+                    transition:"all .15s",
+                  }}>{o.lbl}</button>
+              ))}
+            </div>
+
+            {/* Amount presets */}
+            <div style={{ marginBottom:8 }}>
+              <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>
+                Amount (min ${min})
+              </label>
+              <div style={{ display:"flex", gap:8, marginBottom:8 }}>
+                {presets.map(p => (
+                  <button key={p} onClick={() => setAmount(String(p))}
+                    style={{
+                      flex:1, padding:"10px 0", borderRadius:8, cursor:"pointer", fontSize:14, fontWeight:600,
+                      border:`1px solid ${amt===p?"var(--green)":"var(--border)"}`,
+                      background: amt===p?"rgba(109,193,53,.15)":"var(--surface)",
+                      color:      amt===p?"var(--green)":"var(--muted)",
+                    }}>${p}</button>
+                ))}
+              </div>
+              <input type="number" min={min} step="0.50" value={amount} onChange={e => setAmount(e.target.value)}
+                placeholder="custom amount"
+                style={{
+                  background:"var(--surface)", border:"1px solid var(--border)",
+                  borderRadius:8, padding:"12px 16px", color:"var(--text)",
+                  fontSize:15, width:"100%", outline:"none", fontFamily:"'DM Sans',sans-serif",
+                }} />
+            </div>
+
+            {/* Optional name */}
+            <div style={{ marginBottom:16 }}>
+              <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>
+                Your name (optional)
+              </label>
+              <input value={tipperName} onChange={e => setTipperName(e.target.value)}
+                placeholder="Anonymous"
+                style={{
+                  background:"var(--surface)", border:"1px solid var(--border)",
+                  borderRadius:8, padding:"12px 16px", color:"var(--text)",
+                  fontSize:15, width:"100%", outline:"none", fontFamily:"'DM Sans',sans-serif",
+                }} />
+            </div>
+
+            {/* Cash toggle */}
+            <div onClick={() => setCash(!cash)}
+              style={{
+                background: cash?"rgba(245,200,66,.1)":"var(--surface)",
+                border:`1px solid ${cash?"var(--gold)":"var(--border)"}`,
+                borderRadius:10, padding:"12px 16px", cursor:"pointer",
+                display:"flex", alignItems:"center", justifyContent:"space-between",
+                marginBottom:16,
+              }}>
+              <div>
+                <div style={{ fontWeight:600, fontSize:14, color:cash?"var(--gold)":"var(--text)" }}>💵 I'll tip cash at the bar</div>
+                <div style={{ fontSize:11, color:"var(--muted)", marginTop:2 }}>Honor system — your bump applies now</div>
+              </div>
+              <div style={{
+                width:22, height:22, borderRadius:"50%",
+                border:`2px solid ${cash?"var(--gold)":"var(--border)"}`,
+                background:cash?"var(--gold)":"transparent",
+                display:"flex", alignItems:"center", justifyContent:"center",
+              }}>{cash && <span style={{ fontSize:11, color:"#0d0d0d" }}>✓</span>}</div>
+            </div>
+
+            {/* Payment method picker (hidden if cash) */}
+            {!cash && settings.payment_methods.length > 1 && (
+              <div style={{ marginBottom:16 }}>
+                <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>
+                  Pay with
+                </label>
+                <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                  {settings.payment_methods.map(m => (
+                    <button key={m.id} onClick={() => setMethodId(m.id)}
+                      style={{
+                        padding:"8px 14px", borderRadius:8, cursor:"pointer", fontSize:13, fontWeight:600,
+                        border:`1px solid ${methodId===m.id?"var(--green)":"var(--border)"}`,
+                        background: methodId===m.id?"rgba(109,193,53,.15)":"var(--surface)",
+                        color:      methodId===m.id?"var(--green)":"var(--muted)",
+                      }}>{m.label}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {error && <div style={{ color:"var(--red)", fontSize:13, padding:"8px 12px", background:"rgba(230,57,70,.1)", borderRadius:8, border:"1px solid rgba(230,57,70,.3)", marginBottom:12 }}>{error}</div>}
+
+            <div style={{ display:"flex", gap:10 }}>
+              <button onClick={onClose} disabled={saving}
+                style={{ flex:1, background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:10, padding:14, cursor:"pointer", fontSize:15 }}>
+                Cancel
+              </button>
+              <button onClick={handleSubmit} disabled={saving || amt<=0}
+                style={{
+                  flex:2, background: direction==="up"?"var(--green)":"var(--red)",
+                  color: direction==="up"?"#0d0d0d":"#fff",
+                  borderRadius:10, padding:14, cursor:"pointer", fontSize:16, fontWeight:700, border:"none",
+                  opacity: (saving||amt<=0) ? 0.6 : 1,
+                }}>
+                {saving ? "Working…" : (cash ? `Apply $${amt.toFixed(2)} ${direction}` : `Pay $${amt.toFixed(2)} ${direction}`)}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Patron View ──────────────────────────────────────────────────────────
+    function PatronView({ queue, settings, onRefresh }) {
       const [step, setStep]     = useState("form");
       const [song, setSong]     = useState("");
       const [artist, setArtist] = useState("");
       const [name, setName]     = useState("");
       const [tip, setTip]       = useState("");
       const [bump, setBump]     = useState(false);
+      const [cash, setCash]     = useState(false);
+      const [methodId, setMethodId] = useState(settings.payment_methods[0]?.id || "");
       const [error, setError]   = useState("");
       const [saving, setSaving] = useState(false);
+      const [tipModalSong, setTipModalSong] = useState(null);
+
+      useEffect(() => {
+        if (!methodId && settings.payment_methods[0]) setMethodId(settings.payment_methods[0].id);
+      }, [settings, methodId]);
 
       const TIP_PRESETS = [0, 2, 5, 10];
       const tipAmt = parseFloat(tip) || 0;
+      const method = settings.payment_methods.find(m => m.id === methodId) || settings.payment_methods[0];
 
       function handleSubmit() {
         if (!song.trim()) { setError("Song title is required."); return; }
         if (!name.trim()) { setError("Your name is required."); return; }
+        // Check for duplicate
+        const dup = queue.find(s => s.song.trim().toLowerCase() === song.trim().toLowerCase());
+        if (dup) {
+          setError(`"${dup.song}" is already in the queue. Tap it below to bump it instead!`);
+          return;
+        }
         setError(""); setStep("confirm");
       }
 
       async function handleConfirm() {
         setSaving(true);
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const tips_up = bump ? tipAmt : 0;
         const { error: err } = await sb.from("dj_queue").insert({
-          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          id,
           song: song.trim(), artist: artist.trim(),
-          name: name.trim(), tip: tipAmt, bumped: bump,
+          name: name.trim(),
+          tip: tipAmt,                  // legacy column, kept for backward compat
+          bumped: bump,                 // legacy column
+          tips_up,
+          tips_down: 0,
+          cash_pledged: cash,
         });
+        if (!err && tipAmt > 0) {
+          await logTip({
+            song_id: id, amount: tipAmt, direction: "up",
+            tipper_name: name.trim(),
+            payment_method: cash ? "cash" : (method?.type || null),
+            cash,
+          });
+        }
         setSaving(false);
         if (err) { setError("Something went wrong. Try again."); setStep("form"); return; }
         await onRefresh();
-        setStep("venmo");
+        setStep("payment");
       }
 
       const inp = {
@@ -110,43 +404,79 @@
         fontFamily:"'DM Sans', sans-serif",
       };
 
-      if (step === "venmo") return (
+      // Header used everywhere on patron side
+      const header = (
+        <div style={{ textAlign:"center", marginBottom:28 }}>
+          <div style={{ fontFamily:"var(--font-display)", fontSize:56, color:"var(--green)", letterSpacing:5, animation:"pulse-green 3s ease-in-out infinite", lineHeight:1 }}>INNER GROOVE</div>
+          <div style={{ fontFamily:"var(--font-display)", fontSize:30, color:"var(--green-dim)", letterSpacing:8, marginTop:2, marginBottom:6 }}>BREWING</div>
+          <div style={{ fontFamily:"var(--font-display)", fontSize:14, color:"var(--muted)", letterSpacing:6 }}>
+            {settings.charity_mode && settings.charity_header ? settings.charity_header.toUpperCase() : "DJ REQUEST NIGHT"}
+          </div>
+          {settings.charity_mode && settings.charity_name && (
+            <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--gold)", marginTop:8, letterSpacing:1 }}>
+              💛 Tonight benefits {settings.charity_name}
+            </div>
+          )}
+        </div>
+      );
+
+      // ── Payment confirmation step (shown after submit) ──────────────────
+      if (step === "payment") return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:32, textAlign:"center" }}>
           <div style={{ fontFamily:"var(--font-display)", fontSize:52, color:"var(--green)", letterSpacing:6, animation:"pulse-green 3s ease-in-out infinite", lineHeight:1 }}>INNER GROOVE</div>
           <div style={{ fontFamily:"var(--font-display)", fontSize:28, color:"var(--green-dim)", letterSpacing:8, marginBottom:24 }}>BREWING</div>
           <div style={{ fontSize:56, marginBottom:16 }}>🎉</div>
           <h2 style={{ fontFamily:"var(--font-display)", fontSize:40, color:"var(--green)", letterSpacing:3, marginBottom:8 }}>REQUEST SUBMITTED!</h2>
-          <p style={{ color:"var(--muted)", marginBottom:32, lineHeight:1.6, maxWidth:320 }}>
+          <p style={{ color:"var(--muted)", marginBottom:24, lineHeight:1.6, maxWidth:340 }}>
             <strong style={{ color:"var(--text)" }}>{song}</strong> is in the queue.
-            {tipAmt > 0 && <> Send <strong style={{ color:"var(--gold)" }}>${tipAmt.toFixed(2)}</strong> to lock in your {bump ? "line jump" : "tip"}!</>}
+            {tipAmt > 0 && !cash && <> Send <strong style={{ color:"var(--gold)" }}>${tipAmt.toFixed(2)}</strong> to lock in your {bump ? "line jump" : "tip"}!</>}
+            {tipAmt > 0 && cash && <> See you at the bar with <strong style={{ color:"var(--gold)" }}>${tipAmt.toFixed(2)}</strong>{settings.charity_mode && settings.charity_name && <> for {settings.charity_name}</>}! 💛</>}
           </p>
-          {tipAmt > 0 && (
-            <a href={`https://venmo.com/${VENMO_HANDLE}?txn=pay&amount=${tipAmt.toFixed(2)}&note=DJ+Tip+for+${encodeURIComponent(song)}`}
+
+          {/* Show all configured payment methods (unless cash) */}
+          {tipAmt > 0 && !cash && settings.payment_methods.map(m => (
+            <a key={m.id}
+              href={paymentUrl(m, tipAmt, `DJ Tip for ${song}`)}
               target="_blank" rel="noreferrer"
-              style={{ display:"block", width:"100%", maxWidth:320, background:"#3d95ce", color:"#fff", fontWeight:700, fontSize:18, padding:"16px 24px", borderRadius:12, textDecoration:"none", marginBottom:16 }}>
-              Open Venmo → Pay {VENMO_HANDLE}
+              style={{
+                display:"block", width:"100%", maxWidth:320,
+                background: paymentColor(m.type), color:"#fff",
+                fontWeight:700, fontSize:17, padding:"15px 24px",
+                borderRadius:12, textDecoration:"none", marginBottom:10,
+              }}>
+              Pay ${tipAmt.toFixed(2)} via {m.label} →
             </a>
-          )}
-          <button onClick={() => { setSong(""); setArtist(""); setName(""); setTip(""); setBump(false); setStep("form"); }}
-            style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:8, padding:"10px 24px", cursor:"pointer", fontSize:14 }}>
+          ))}
+
+          <button onClick={() => { setSong(""); setArtist(""); setName(""); setTip(""); setBump(false); setCash(false); setStep("form"); }}
+            style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:8, padding:"10px 24px", cursor:"pointer", fontSize:14, marginTop:8 }}>
             Submit another request
           </button>
         </div>
       );
 
+      // ── Confirm step ─────────────────────────────────────────────────────
       if (step === "confirm") return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:24 }}>
           <div style={{ width:"100%", maxWidth:420, animation:"slide-up .3s ease" }}>
             <h2 style={{ fontFamily:"var(--font-display)", fontSize:40, color:"var(--green)", letterSpacing:3, marginBottom:24, textAlign:"center" }}>CONFIRM REQUEST</h2>
             <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:16, padding:24, marginBottom:24 }}>
-              {[["Song",song],["Artist",artist||"—"],["Your Name",name],["Tip Amount",tipAmt>0?`$${tipAmt.toFixed(2)}`:"No tip"],["Jump the Line?",bump?"✅ Yes":"No"]].map(([k,v]) => (
+              {[
+                ["Song", song],
+                ["Artist", artist || "—"],
+                ["Your Name", name],
+                ["Tip Amount", tipAmt > 0 ? `$${tipAmt.toFixed(2)}` : "No tip"],
+                ["Payment", tipAmt === 0 ? "—" : (cash ? "💵 Cash at the bar" : (method?.label || "—"))],
+                ["Jump the Line?", bump ? "✅ Yes" : "No"],
+              ].map(([k, v]) => (
                 <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"10px 0", borderBottom:"1px solid var(--border)" }}>
                   <span style={{ color:"var(--muted)", fontSize:14 }}>{k}</span>
                   <span style={{ fontWeight:600, color:k==="Tip Amount"?"var(--gold)":"var(--text)" }}>{v}</span>
                 </div>
               ))}
             </div>
-            {tipAmt > 0 && <p style={{ color:"var(--muted)", fontSize:13, textAlign:"center", marginBottom:20, lineHeight:1.5 }}>After confirming you'll be redirected to Venmo. Honor system — thanks for keeping it real! 🤘</p>}
+            {tipAmt > 0 && !cash && <p style={{ color:"var(--muted)", fontSize:13, textAlign:"center", marginBottom:20, lineHeight:1.5 }}>After confirming you'll see payment options. Honor system — thanks for keeping it real! 🤘</p>}
+            {tipAmt > 0 && cash && <p style={{ color:"var(--muted)", fontSize:13, textAlign:"center", marginBottom:20, lineHeight:1.5 }}>Your bump applies now. Settle up at the bar — we trust you! 💛</p>}
             <div style={{ display:"flex", gap:12 }}>
               <button onClick={() => setStep("form")} style={{ flex:1, background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:10, padding:14, cursor:"pointer", fontSize:15 }}>← Back</button>
               <button onClick={handleConfirm} disabled={saving}
@@ -158,13 +488,10 @@
         </div>
       );
 
+      // ── Form step ────────────────────────────────────────────────────────
       return (
-        <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", alignItems:"center", padding:"32px 20px" }}>
-          <div style={{ textAlign:"center", marginBottom:28 }}>
-            <div style={{ fontFamily:"var(--font-display)", fontSize:56, color:"var(--green)", letterSpacing:5, animation:"pulse-green 3s ease-in-out infinite", lineHeight:1 }}>INNER GROOVE</div>
-            <div style={{ fontFamily:"var(--font-display)", fontSize:30, color:"var(--green-dim)", letterSpacing:8, marginTop:2, marginBottom:6 }}>BREWING</div>
-            <div style={{ fontFamily:"var(--font-display)", fontSize:14, color:"var(--muted)", letterSpacing:6 }}>DJ REQUEST NIGHT</div>
-          </div>
+        <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", alignItems:"center", padding:"32px 20px 100px" }}>
+          {header}
           <div style={{ width:"100%", maxWidth:420, display:"flex", flexDirection:"column", gap:16 }}>
             <div>
               <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Song Title *</label>
@@ -194,27 +521,72 @@
               <input type="number" min="0" step="0.50" value={tip} onChange={e => setTip(e.target.value)}
                 placeholder="or enter custom amount" style={{ ...inp, fontSize:15 }} />
             </div>
+
             {tipAmt > 0 && (
-              <div onClick={() => setBump(!bump)}
-                style={{
-                  background:bump?"rgba(109,193,53,.1)":"var(--surface)",
-                  border:`1px solid ${bump?"var(--green)":"var(--border)"}`,
-                  borderRadius:12, padding:"16px 20px", cursor:"pointer",
-                  display:"flex", alignItems:"center", justifyContent:"space-between",
-                }}>
-                <div>
-                  <div style={{ fontWeight:600, fontSize:15, color:bump?"var(--green)":"var(--text)" }}>⚡ Jump the Line</div>
-                  <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>Use your tip to move up in the queue</div>
+              <>
+                <div onClick={() => setBump(!bump)}
+                  style={{
+                    background:bump?"rgba(109,193,53,.1)":"var(--surface)",
+                    border:`1px solid ${bump?"var(--green)":"var(--border)"}`,
+                    borderRadius:12, padding:"16px 20px", cursor:"pointer",
+                    display:"flex", alignItems:"center", justifyContent:"space-between",
+                  }}>
+                  <div>
+                    <div style={{ fontWeight:600, fontSize:15, color:bump?"var(--green)":"var(--text)" }}>⚡ Jump the Line</div>
+                    <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>Use your tip to move up in the queue</div>
+                  </div>
+                  <div style={{
+                    width:24, height:24, borderRadius:"50%",
+                    border:`2px solid ${bump?"var(--green)":"var(--border)"}`,
+                    background:bump?"var(--green)":"transparent",
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                  }}>{bump && <span style={{ fontSize:12, color:"#0d0d0d" }}>✓</span>}</div>
                 </div>
-                <div style={{
-                  width:24, height:24, borderRadius:"50%",
-                  border:`2px solid ${bump?"var(--green)":"var(--border)"}`,
-                  background:bump?"var(--green)":"transparent",
-                  display:"flex", alignItems:"center", justifyContent:"center",
-                }}>{bump && <span style={{ fontSize:12, color:"#0d0d0d" }}>✓</span>}</div>
-              </div>
+
+                <div onClick={() => setCash(!cash)}
+                  style={{
+                    background:cash?"rgba(245,200,66,.1)":"var(--surface)",
+                    border:`1px solid ${cash?"var(--gold)":"var(--border)"}`,
+                    borderRadius:12, padding:"16px 20px", cursor:"pointer",
+                    display:"flex", alignItems:"center", justifyContent:"space-between",
+                  }}>
+                  <div>
+                    <div style={{ fontWeight:600, fontSize:15, color:cash?"var(--gold)":"var(--text)" }}>💵 I'll tip cash at the bar</div>
+                    <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>
+                      {settings.charity_mode && settings.charity_name
+                        ? `Bring it to the bar — goes to ${settings.charity_name}`
+                        : "Honor system — bring it to the bar"}
+                    </div>
+                  </div>
+                  <div style={{
+                    width:24, height:24, borderRadius:"50%",
+                    border:`2px solid ${cash?"var(--gold)":"var(--border)"}`,
+                    background:cash?"var(--gold)":"transparent",
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                  }}>{cash && <span style={{ fontSize:12, color:"#0d0d0d" }}>✓</span>}</div>
+                </div>
+
+                {!cash && settings.payment_methods.length > 1 && (
+                  <div>
+                    <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Pay with</label>
+                    <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                      {settings.payment_methods.map(m => (
+                        <button key={m.id} onClick={() => setMethodId(m.id)}
+                          style={{
+                            padding:"8px 14px", borderRadius:8, cursor:"pointer", fontSize:13, fontWeight:600,
+                            border:`1px solid ${methodId===m.id?"var(--green)":"var(--border)"}`,
+                            background: methodId===m.id?"rgba(109,193,53,.15)":"var(--surface)",
+                            color:      methodId===m.id?"var(--green)":"var(--muted)",
+                          }}>{m.label}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
+
             {error && <div style={{ color:"var(--red)", fontSize:13, padding:"8px 12px", background:"rgba(230,57,70,.1)", borderRadius:8, border:"1px solid rgba(230,57,70,.3)" }}>{error}</div>}
+
             <button onClick={handleSubmit}
               style={{
                 background:"var(--green)", color:"#0d0d0d", border:"none",
@@ -224,32 +596,67 @@
               }}>
               PREVIEW REQUEST →
             </button>
+
+            {/* Public queue with tip-on-existing */}
             {queue.length > 0 && (
               <div style={{ marginTop:8 }}>
-                <div style={{ fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", fontFamily:"var(--font-mono)", marginBottom:10 }}>Current Queue ({queue.length})</div>
-                {queue.slice(0,4).map((s,i) => (
-                  <div key={s.id} style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
-                    <span style={{ fontFamily:"var(--font-mono)", fontSize:12, color:i===0?"var(--green)":"var(--muted)", minWidth:20 }}>{i+1}</span>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontSize:14, fontWeight:500, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.song}</div>
-                      <div style={{ fontSize:12, color:"var(--muted)" }}>{s.name}{s.artist?` · ${s.artist}`:""}</div>
+                <div style={{ fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", fontFamily:"var(--font-mono)", marginBottom:10, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span>Current Queue ({queue.length})</span>
+                  <span style={{ color:"var(--green)", textTransform:"none", letterSpacing:1, fontSize:10 }}>tap to bump ↑↓</span>
+                </div>
+                {queue.map((s, i) => {
+                  const up = Number(s.tips_up || 0) + ((!s.tips_up && s.bumped) ? Number(s.tip || 0) : 0);
+                  const down = Number(s.tips_down || 0);
+                  return (
+                    <div key={s.id} onClick={() => setTipModalSong(s)}
+                      style={{
+                        display:"flex", alignItems:"center", gap:12,
+                        padding:"10px 12px", marginBottom:6,
+                        background:"var(--surface)", borderRadius:8,
+                        border:"1px solid var(--border)", cursor:"pointer",
+                        transition:"all .15s",
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.borderColor = "var(--green)"}
+                      onMouseLeave={e => e.currentTarget.style.borderColor = "var(--border)"}>
+                      <span style={{ fontFamily:"var(--font-mono)", fontSize:12, color:i===0?"var(--green)":"var(--muted)", minWidth:20 }}>{i+1}</span>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:14, fontWeight:500, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.song}</div>
+                        <div style={{ fontSize:12, color:"var(--muted)" }}>{s.name}{s.artist?` · ${s.artist}`:""}</div>
+                      </div>
+                      {settings.show_tip_totals_publicly && (up > 0 || down > 0) && (
+                        <div style={{ display:"flex", flexDirection:"column", gap:2, alignItems:"flex-end", fontFamily:"var(--font-mono)", fontSize:11 }}>
+                          {up > 0   && <span style={{ color:"var(--green)" }}>↑ ${up.toFixed(2)}</span>}
+                          {down > 0 && <span style={{ color:"var(--red)"   }}>↓ ${down.toFixed(2)}</span>}
+                        </div>
+                      )}
                     </div>
-                    {s.bumped && <span style={{ fontSize:10, color:"var(--green)", border:"1px solid var(--green)", borderRadius:4, padding:"2px 6px", fontFamily:"var(--font-mono)" }}>BUMP</span>}
-                  </div>
-                ))}
-                {queue.length > 4 && <div style={{ fontSize:12, color:"var(--muted)", textAlign:"center", padding:"8px 0" }}>+{queue.length-4} more</div>}
+                  );
+                })}
               </div>
             )}
           </div>
+
+          {tipModalSong && (
+            <TipModal
+              song={tipModalSong}
+              settings={settings}
+              onClose={() => setTipModalSong(null)}
+              onComplete={async () => { setTipModalSong(null); await onRefresh(); }}
+            />
+          )}
         </div>
       );
     }
 
-    // ── Display View ───────────────────────────────────────────────────────────
-    function DisplayView({ queue }) {
+    // ── Display View ─────────────────────────────────────────────────────────
+    function DisplayView({ queue, settings, charityTotal }) {
       const [time, setTime] = useState(new Date());
       useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
       const timeStr = time.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
+
+      const tickerText = settings.charity_mode && settings.charity_name
+        ? `🎵 SCAN THE QR CODE TO REQUEST A SONG  ·  TONIGHT BENEFITS ${settings.charity_name.toUpperCase()}  ·  TIP TO JUMP THE LINE  ·  INNER GROOVE BREWING  ·  `
+        : `🎵 SCAN THE QR CODE TO REQUEST A SONG  ·  TIP THE DJ TO JUMP THE LINE  ·  INNER GROOVE BREWING  ·  `;
 
       return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", overflow:"hidden", position:"relative" }}>
@@ -261,15 +668,33 @@
                 <div style={{ fontFamily:"var(--font-display)", fontSize:14, color:"var(--green-dim)", letterSpacing:6 }}>BREWING</div>
               </div>
               <div>
-                <div style={{ fontFamily:"var(--font-display)", fontSize:48, color:"var(--green)", letterSpacing:5, lineHeight:1, animation:"pulse-green 3s ease-in-out infinite" }}>DJ REQUEST NIGHT</div>
-                <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--muted)", letterSpacing:3, marginTop:4 }}>SCAN QR CODE TO REQUEST A SONG</div>
+                <div style={{ fontFamily:"var(--font-display)", fontSize:48, color:"var(--green)", letterSpacing:5, lineHeight:1, animation:"pulse-green 3s ease-in-out infinite" }}>
+                  {settings.charity_mode && settings.charity_header ? settings.charity_header.toUpperCase() : "DJ REQUEST NIGHT"}
+                </div>
+                <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--muted)", letterSpacing:3, marginTop:4 }}>
+                  {settings.charity_mode && settings.charity_name
+                    ? `BENEFITTING ${settings.charity_name.toUpperCase()} · SCAN QR TO REQUEST`
+                    : "SCAN QR CODE TO REQUEST A SONG"}
+                </div>
               </div>
             </div>
             <div style={{ textAlign:"right" }}>
-              <div style={{ fontFamily:"var(--font-mono)", fontSize:44, color:"var(--white)", letterSpacing:2 }}>{timeStr}</div>
-              <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--muted)", marginTop:2 }}>{queue.length} SONGS IN QUEUE</div>
+              {settings.charity_mode ? (
+                <>
+                  <div style={{ fontFamily:"var(--font-display)", fontSize:42, color:"var(--gold)", letterSpacing:2, lineHeight:1 }}>
+                    ${Number(charityTotal || 0).toFixed(0)}
+                  </div>
+                  <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--muted)", marginTop:4, letterSpacing:2 }}>RAISED · {timeStr}</div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontFamily:"var(--font-mono)", fontSize:44, color:"var(--white)", letterSpacing:2 }}>{timeStr}</div>
+                  <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--muted)", marginTop:2 }}>{queue.length} SONGS IN QUEUE</div>
+                </>
+              )}
             </div>
           </div>
+
           <div style={{ flex:1, padding:"36px 48px", position:"relative", zIndex:1 }}>
             {queue.length === 0 ? (
               <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"50vh", gap:16 }}>
@@ -279,51 +704,63 @@
               </div>
             ) : (
               <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-                {queue.slice(0,8).map((s,i) => (
-                  <div key={s.id} style={{
-                    display:"flex", alignItems:"center", gap:24,
-                    background:i===0?"rgba(109,193,53,.07)":"var(--card)",
-                    border:`1px solid ${i===0?"rgba(109,193,53,.5)":s.bumped?"rgba(109,193,53,.25)":"var(--border)"}`,
-                    borderRadius:16, padding:"20px 28px", animation:"slide-up .4s ease",
-                  }}>
-                    <div style={{ fontFamily:"var(--font-display)", fontSize:48, lineHeight:1, color:i===0?"var(--green)":"var(--border)", minWidth:60, textAlign:"center" }}>
-                      {i===0?"▶":String(i+1).padStart(2,"0")}
-                    </div>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontFamily:"var(--font-display)", fontSize:i===0?36:28, letterSpacing:2, color:i===0?"var(--green)":"var(--text)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
-                        {s.song.toUpperCase()}
+                {queue.slice(0,8).map((s,i) => {
+                  const up = Number(s.tips_up || 0) + ((!s.tips_up && s.bumped) ? Number(s.tip || 0) : 0);
+                  const down = Number(s.tips_down || 0);
+                  const hasMovement = up > 0 || down > 0;
+                  return (
+                    <div key={s.id} style={{
+                      display:"flex", alignItems:"center", gap:24,
+                      background:i===0?"rgba(109,193,53,.07)":"var(--card)",
+                      border:`1px solid ${i===0?"rgba(109,193,53,.5)":hasMovement?"rgba(109,193,53,.25)":"var(--border)"}`,
+                      borderRadius:16, padding:"20px 28px", animation:"slide-up .4s ease",
+                    }}>
+                      <div style={{ fontFamily:"var(--font-display)", fontSize:48, lineHeight:1, color:i===0?"var(--green)":"var(--border)", minWidth:60, textAlign:"center" }}>
+                        {i===0?"▶":String(i+1).padStart(2,"0")}
                       </div>
-                      <div style={{ fontFamily:"var(--font-mono)", fontSize:14, color:"var(--muted)", marginTop:2 }}>
-                        {s.artist && <span>{s.artist} · </span>}Requested by <span style={{ color:"var(--green)" }}>{s.name}</span>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontFamily:"var(--font-display)", fontSize:i===0?36:28, letterSpacing:2, color:i===0?"var(--green)":"var(--text)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                          {s.song.toUpperCase()}
+                        </div>
+                        <div style={{ fontFamily:"var(--font-mono)", fontSize:14, color:"var(--muted)", marginTop:2 }}>
+                          {s.artist && <span>{s.artist} · </span>}Requested by <span style={{ color:"var(--green)" }}>{s.name}</span>
+                        </div>
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:6, alignItems:"flex-end" }}>
+                        {i===0 && <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--green)", border:"1px solid var(--green)", borderRadius:6, padding:"4px 12px", letterSpacing:2 }}>UP NEXT</div>}
+                        {settings.show_tip_totals_publicly && up > 0 && (
+                          <div style={{ fontFamily:"var(--font-mono)", fontSize:14, color:"var(--green)", letterSpacing:1 }}>↑ ${up.toFixed(2)}</div>
+                        )}
+                        {settings.show_tip_totals_publicly && down > 0 && (
+                          <div style={{ fontFamily:"var(--font-mono)", fontSize:14, color:"var(--red)", letterSpacing:1 }}>↓ ${down.toFixed(2)}</div>
+                        )}
                       </div>
                     </div>
-                    <div>
-                      {i===0 && <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--green)", border:"1px solid var(--green)", borderRadius:6, padding:"4px 12px", letterSpacing:2 }}>UP NEXT</div>}
-                      {i>0 && s.bumped && <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--green-dim)", border:"1px solid var(--green-dim)", borderRadius:6, padding:"4px 10px", letterSpacing:2 }}>⚡ BUMPED</div>}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {queue.length > 8 && <div style={{ textAlign:"center", fontFamily:"var(--font-mono)", color:"var(--muted)", fontSize:14, padding:"16px 0" }}>+ {queue.length-8} more in queue</div>}
               </div>
             )}
           </div>
+
           <div style={{ borderTop:"1px solid var(--border)", background:"rgba(109,193,53,.05)", padding:"12px 0", overflow:"hidden" }}>
             <div style={{ animation:"ticker 30s linear infinite", whiteSpace:"nowrap", display:"inline-block", fontFamily:"var(--font-mono)", fontSize:13, color:"var(--green)", letterSpacing:2 }}>
-              {Array(4).fill("🎵 SCAN THE QR CODE TO REQUEST A SONG  ·  TIP THE DJ TO JUMP THE LINE  ·  INNER GROOVE BREWING  ·  ").join("")}
+              {Array(4).fill(tickerText).join("")}
             </div>
           </div>
         </div>
       );
     }
 
-    // ── Admin View ─────────────────────────────────────────────────────────────
-    function AdminView({ queue, onRefresh }) {
+    // ── Admin View ───────────────────────────────────────────────────────────
+    function AdminView({ queue, settings, charityTotal, onRefresh, onSettingsChange }) {
       const [pin, setPin]     = useState("");
       const [authed, setAuthed] = useState(false);
+      const [tab, setTab] = useState("queue");
       const ADMIN_PIN = "1234";
 
       async function markPlayed(id) {
-        await sb.from("dj_queue").delete().eq("id", id);
+        await sb.from("dj_queue").update({ played_at: new Date().toISOString() }).eq("id", id);
         await onRefresh();
       }
       async function removeEntry(id) {
@@ -333,6 +770,11 @@
       async function clearAll() {
         if (!confirm("Clear the entire queue? This cannot be undone.")) return;
         await sb.from("dj_queue").delete().neq("id", "");
+        await onRefresh();
+      }
+      async function resetCharityTotal() {
+        if (!confirm("Reset the charity total to $0? This clears all logged tips for this session but does NOT clear the queue.")) return;
+        await sb.from("tips").delete().neq("id", "");
         await onRefresh();
       }
 
@@ -356,9 +798,10 @@
       );
 
       return (
-        <div style={{ minHeight:"100vh", background:"var(--bg)", padding:32 }}>
-          <div style={{ maxWidth:640, margin:"0 auto" }}>
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:32 }}>
+        <div style={{ minHeight:"100vh", background:"var(--bg)", padding:"32px 20px 100px" }}>
+          <div style={{ maxWidth:760, margin:"0 auto" }}>
+            {/* Header */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:24, flexWrap:"wrap", gap:12 }}>
               <div style={{ display:"flex", alignItems:"center", gap:16 }}>
                 <div>
                   <div style={{ fontFamily:"var(--font-display)", fontSize:18, color:"var(--green)", letterSpacing:3 }}>INNER GROOVE</div>
@@ -366,18 +809,75 @@
                 </div>
                 <div style={{ fontFamily:"var(--font-display)", fontSize:36, color:"var(--white)", letterSpacing:4 }}>DJ CONSOLE</div>
               </div>
-              <button onClick={clearAll}
-                style={{ background:"rgba(230,57,70,.1)", border:"1px solid var(--red)", color:"var(--red)", borderRadius:8, padding:"8px 20px", cursor:"pointer", fontSize:13, fontFamily:"var(--font-mono)" }}>
-                CLEAR ALL
-              </button>
+              {settings.charity_mode && (
+                <div style={{ background:"rgba(245,200,66,.1)", border:"1px solid var(--gold)", borderRadius:10, padding:"8px 16px" }}>
+                  <div style={{ fontFamily:"var(--font-mono)", fontSize:10, color:"var(--gold)", letterSpacing:2 }}>CHARITY MODE · {settings.charity_name || "ON"}</div>
+                  <div style={{ fontFamily:"var(--font-display)", fontSize:24, color:"var(--gold)", letterSpacing:1, lineHeight:1 }}>${Number(charityTotal || 0).toFixed(2)} RAISED</div>
+                </div>
+              )}
             </div>
-            {queue.length === 0 ? (
-              <div style={{ textAlign:"center", color:"var(--muted)", padding:"60px 0", fontFamily:"var(--font-mono)" }}>Queue is empty</div>
-            ) : (
-              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                {queue.map((s,i) => (
+
+            {/* Tabs */}
+            <div style={{ display:"flex", gap:4, marginBottom:20, background:"var(--surface)", borderRadius:10, padding:4 }}>
+              {[["queue","Queue"],["payments","Payment Methods"],["charity","Charity Mode"],["display","Display"]].map(([v,lbl]) => (
+                <button key={v} onClick={() => setTab(v)}
+                  style={{
+                    flex:1, padding:"10px 0", borderRadius:8, border:"none", cursor:"pointer",
+                    fontFamily:"var(--font-mono)", fontSize:12, letterSpacing:2, fontWeight:700,
+                    background: tab===v ? "var(--green)" : "transparent",
+                    color:      tab===v ? "#0d0d0d" : "var(--muted)",
+                    transition:"all .15s",
+                  }}>{lbl.toUpperCase()}</button>
+              ))}
+            </div>
+
+            {tab === "queue" && (
+              <QueueTab queue={queue} markPlayed={markPlayed} removeEntry={removeEntry}
+                clearAll={clearAll} resetCharityTotal={resetCharityTotal} settings={settings} />
+            )}
+            {tab === "payments" && (
+              <PaymentsTab settings={settings} onSettingsChange={onSettingsChange} />
+            )}
+            {tab === "charity" && (
+              <CharityTab settings={settings} onSettingsChange={onSettingsChange}
+                charityTotal={charityTotal} resetCharityTotal={resetCharityTotal} />
+            )}
+            {tab === "display" && (
+              <DisplayTab settings={settings} onSettingsChange={onSettingsChange} />
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function QueueTab({ queue, markPlayed, removeEntry, clearAll, resetCharityTotal, settings }) {
+      return (
+        <>
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginBottom:16 }}>
+            {settings.charity_mode && (
+              <button onClick={resetCharityTotal}
+                style={{ background:"rgba(245,200,66,.1)", border:"1px solid var(--gold)", color:"var(--gold)", borderRadius:8, padding:"8px 16px", cursor:"pointer", fontSize:12, fontFamily:"var(--font-mono)", letterSpacing:1 }}>
+                RESET CHARITY TOTAL
+              </button>
+            )}
+            <button onClick={clearAll}
+              style={{ background:"rgba(230,57,70,.1)", border:"1px solid var(--red)", color:"var(--red)", borderRadius:8, padding:"8px 20px", cursor:"pointer", fontSize:13, fontFamily:"var(--font-mono)" }}>
+              CLEAR ALL
+            </button>
+          </div>
+          {queue.length === 0 ? (
+            <div style={{ textAlign:"center", color:"var(--muted)", padding:"60px 0", fontFamily:"var(--font-mono)" }}>Queue is empty</div>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {queue.map((s,i) => {
+                const up = Number(s.tips_up || 0) + ((!s.tips_up && s.bumped) ? Number(s.tip || 0) : 0);
+                const down = Number(s.tips_down || 0);
+                const hasUp = up > 0;
+                const hasDown = down > 0;
+                return (
                   <div key={s.id} style={{
-                    background:"var(--card)", border:`1px solid ${s.bumped?"rgba(109,193,53,.4)":"var(--border)"}`,
+                    background:"var(--card)",
+                    border:`1px solid ${hasUp || hasDown ? "rgba(109,193,53,.4)" : "var(--border)"}`,
                     borderRadius:12, padding:"16px 20px", display:"flex", alignItems:"center", gap:16,
                   }}>
                     <span style={{ fontFamily:"var(--font-mono)", fontSize:18, color:i===0?"var(--green)":"var(--muted)", minWidth:28 }}>#{i+1}</span>
@@ -385,8 +885,15 @@
                       <div style={{ fontWeight:600, fontSize:16, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.song}</div>
                       <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>
                         {s.artist && `${s.artist} · `}{s.name}
-                        {s.tip > 0 && <span style={{ color:"var(--gold)", marginLeft:8 }}>💰 ${s.tip.toFixed(2)}{s.bumped?" (BUMP)":""}</span>}
+                        {s.cash_pledged && <span style={{ color:"var(--gold)", marginLeft:8 }}>💵 cash pledged</span>}
                       </div>
+                      {(hasUp || hasDown) && (
+                        <div style={{ display:"flex", gap:10, marginTop:4, fontFamily:"var(--font-mono)", fontSize:12 }}>
+                          {hasUp   && <span style={{ color:"var(--green)" }}>↑ ${up.toFixed(2)}</span>}
+                          {hasDown && <span style={{ color:"var(--red)"   }}>↓ ${down.toFixed(2)}</span>}
+                          <span style={{ color:"var(--muted)" }}>net: ${(up-down).toFixed(2)}</span>
+                        </div>
+                      )}
                     </div>
                     <div style={{ display:"flex", gap:8 }}>
                       <button onClick={() => markPlayed(s.id)}
@@ -399,36 +906,304 @@
                       </button>
                     </div>
                   </div>
-                ))}
+                );
+              })}
+            </div>
+          )}
+        </>
+      );
+    }
+
+    function PaymentsTab({ settings, onSettingsChange }) {
+      const [methods, setMethods] = useState(settings.payment_methods);
+      const [minUp, setMinUp] = useState(settings.min_tip_up);
+      const [minDown, setMinDown] = useState(settings.min_tip_down);
+      const [saving, setSaving] = useState(false);
+      const [savedMsg, setSavedMsg] = useState("");
+
+      function addMethod() {
+        setMethods([...methods, { id: `m-${Date.now()}`, type: "venmo", handle: "", label: "" }]);
+      }
+      function updateMethod(i, patch) {
+        setMethods(methods.map((m, idx) => idx === i ? { ...m, ...patch } : m));
+      }
+      function removeMethod(i) {
+        setMethods(methods.filter((_, idx) => idx !== i));
+      }
+      async function save() {
+        setSaving(true);
+        const cleaned = methods.filter(m => m.handle && m.label);
+        const err = await saveSettings({
+          payment_methods: cleaned,
+          min_tip_up: Number(minUp) || 1,
+          min_tip_down: Number(minDown) || 3,
+        });
+        setSaving(false);
+        if (!err) {
+          setSavedMsg("Saved!");
+          await onSettingsChange();
+          setTimeout(() => setSavedMsg(""), 2000);
+        } else {
+          setSavedMsg("Error saving — check console");
+        }
+      }
+
+      const TYPES = [
+        { v:"venmo",   l:"Venmo" },
+        { v:"cashapp", l:"Cash App" },
+        { v:"paypal",  l:"PayPal" },
+        { v:"zelle",   l:"Zelle (email)" },
+        { v:"url",     l:"Custom URL" },
+      ];
+
+      return (
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:20 }}>
+            <div style={{ fontFamily:"var(--font-display)", fontSize:20, color:"var(--green)", letterSpacing:2, marginBottom:12 }}>PAYMENT METHODS</div>
+            <div style={{ fontSize:13, color:"var(--muted)", marginBottom:16 }}>Patrons will see all of these as options when tipping. Reorder by deleting and re-adding.</div>
+
+            {methods.map((m, i) => (
+              <div key={m.id} style={{ display:"flex", gap:8, marginBottom:10, alignItems:"flex-start", flexWrap:"wrap" }}>
+                <select value={m.type} onChange={e => updateMethod(i, { type: e.target.value })}
+                  style={{ background:"var(--surface)", border:"1px solid var(--border)", color:"var(--text)", borderRadius:8, padding:"10px 12px", fontSize:14, fontFamily:"'DM Sans',sans-serif", outline:"none", minWidth:130 }}>
+                  {TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
+                </select>
+                <input value={m.label} onChange={e => updateMethod(i, { label: e.target.value })}
+                  placeholder="Display label (e.g. Venmo)"
+                  style={{ flex:"1 1 140px", background:"var(--surface)", border:"1px solid var(--border)", color:"var(--text)", borderRadius:8, padding:"10px 12px", fontSize:14, outline:"none" }} />
+                <input value={m.handle} onChange={e => updateMethod(i, { handle: e.target.value })}
+                  placeholder={m.type === "url" ? "https://..." : m.type === "zelle" ? "email@example.com" : "@handle or $cashtag"}
+                  style={{ flex:"2 1 200px", background:"var(--surface)", border:"1px solid var(--border)", color:"var(--text)", borderRadius:8, padding:"10px 12px", fontSize:14, outline:"none" }} />
+                <button onClick={() => removeMethod(i)}
+                  style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:8, padding:"10px 14px", cursor:"pointer", fontSize:14 }}>✕</button>
               </div>
-            )}
+            ))}
+
+            <button onClick={addMethod}
+              style={{ background:"transparent", border:"1px dashed var(--border)", color:"var(--muted)", borderRadius:8, padding:"10px 16px", cursor:"pointer", fontSize:13, marginTop:6, width:"100%" }}>
+              + Add payment method
+            </button>
+          </div>
+
+          <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:20 }}>
+            <div style={{ fontFamily:"var(--font-display)", fontSize:20, color:"var(--green)", letterSpacing:2, marginBottom:12 }}>MINIMUM TIPS</div>
+            <div style={{ display:"flex", gap:16, flexWrap:"wrap" }}>
+              <div style={{ flex:1, minWidth:140 }}>
+                <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Bump-up minimum ($)</label>
+                <input type="number" min="0" step="0.50" value={minUp} onChange={e => setMinUp(e.target.value)}
+                  style={{ background:"var(--surface)", border:"1px solid var(--border)", color:"var(--text)", borderRadius:8, padding:"10px 12px", fontSize:14, width:"100%", outline:"none" }} />
+              </div>
+              <div style={{ flex:1, minWidth:140 }}>
+                <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Bump-down minimum ($)</label>
+                <input type="number" min="0" step="0.50" value={minDown} onChange={e => setMinDown(e.target.value)}
+                  style={{ background:"var(--surface)", border:"1px solid var(--border)", color:"var(--text)", borderRadius:8, padding:"10px 12px", fontSize:14, width:"100%", outline:"none" }} />
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display:"flex", gap:12, alignItems:"center" }}>
+            <button onClick={save} disabled={saving}
+              style={{ background:"var(--green)", color:"#0d0d0d", border:"none", borderRadius:10, padding:"14px 28px", fontSize:15, fontWeight:700, cursor:"pointer", opacity:saving?0.6:1 }}>
+              {saving ? "Saving…" : "Save Changes"}
+            </button>
+            {savedMsg && <span style={{ color:"var(--green)", fontFamily:"var(--font-mono)", fontSize:13 }}>{savedMsg}</span>}
           </div>
         </div>
       );
     }
 
-    // ── Root App ───────────────────────────────────────────────────────────────
-    function App() {
-      const [queue, setQueue]   = useState([]);
-      const [loaded, setLoaded] = useState(false);
-      const [view, setView]     = useState("patron");
+    function CharityTab({ settings, onSettingsChange, charityTotal, resetCharityTotal }) {
+      const [enabled, setEnabled] = useState(!!settings.charity_mode);
+      const [name, setName] = useState(settings.charity_name || "");
+      const [header, setHeader] = useState(settings.charity_header || "");
+      const [saving, setSaving] = useState(false);
+      const [savedMsg, setSavedMsg] = useState("");
 
-      const refresh = useCallback(async () => {
+      async function save() {
+        setSaving(true);
+        const err = await saveSettings({
+          charity_mode: enabled,
+          charity_name: name,
+          charity_header: header,
+        });
+        setSaving(false);
+        if (!err) {
+          setSavedMsg("Saved!");
+          await onSettingsChange();
+          setTimeout(() => setSavedMsg(""), 2000);
+        }
+      }
+
+      return (
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:20 }}>
+            <div onClick={() => setEnabled(!enabled)}
+              style={{
+                background: enabled?"rgba(245,200,66,.1)":"var(--surface)",
+                border:`1px solid ${enabled?"var(--gold)":"var(--border)"}`,
+                borderRadius:12, padding:"16px 20px", cursor:"pointer",
+                display:"flex", alignItems:"center", justifyContent:"space-between",
+                marginBottom:enabled?16:0,
+              }}>
+              <div>
+                <div style={{ fontWeight:700, fontSize:16, color:enabled?"var(--gold)":"var(--text)", fontFamily:"var(--font-display)", letterSpacing:2 }}>💛 CHARITY NIGHT MODE</div>
+                <div style={{ fontSize:12, color:"var(--muted)", marginTop:4 }}>Display custom header, show running total raised, swap copy throughout the app</div>
+              </div>
+              <div style={{
+                width:48, height:26, borderRadius:13, padding:3,
+                background: enabled?"var(--gold)":"var(--border)",
+                transition:"all .2s", flexShrink:0,
+              }}>
+                <div style={{
+                  width:20, height:20, borderRadius:"50%", background:"#0d0d0d",
+                  transform: enabled ? "translateX(22px)" : "translateX(0)",
+                  transition:"transform .2s",
+                }} />
+              </div>
+            </div>
+
+            {enabled && (
+              <>
+                <div style={{ marginBottom:14 }}>
+                  <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Charity name</label>
+                  <input value={name} onChange={e => setName(e.target.value)}
+                    placeholder="e.g. Pittsburgh Food Bank"
+                    style={{ background:"var(--surface)", border:"1px solid var(--border)", color:"var(--text)", borderRadius:8, padding:"10px 12px", fontSize:14, width:"100%", outline:"none" }} />
+                </div>
+                <div style={{ marginBottom:14 }}>
+                  <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Custom header (replaces "DJ Request Night")</label>
+                  <input value={header} onChange={e => setHeader(e.target.value)}
+                    placeholder="e.g. Tunes for a Cause"
+                    style={{ background:"var(--surface)", border:"1px solid var(--border)", color:"var(--text)", borderRadius:8, padding:"10px 12px", fontSize:14, width:"100%", outline:"none" }} />
+                  <div style={{ fontSize:11, color:"var(--muted)", marginTop:4 }}>Leave blank to keep default header.</div>
+                </div>
+                <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 16px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <div>
+                    <div style={{ fontFamily:"var(--font-mono)", fontSize:11, letterSpacing:2, color:"var(--muted)" }}>RUNNING TOTAL</div>
+                    <div style={{ fontFamily:"var(--font-display)", fontSize:32, color:"var(--gold)", letterSpacing:2, lineHeight:1 }}>${Number(charityTotal || 0).toFixed(2)}</div>
+                  </div>
+                  <button onClick={resetCharityTotal}
+                    style={{ background:"transparent", border:"1px solid var(--gold)", color:"var(--gold)", borderRadius:8, padding:"8px 14px", cursor:"pointer", fontSize:12, fontFamily:"var(--font-mono)" }}>
+                    RESET
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div style={{ display:"flex", gap:12, alignItems:"center" }}>
+            <button onClick={save} disabled={saving}
+              style={{ background:"var(--green)", color:"#0d0d0d", border:"none", borderRadius:10, padding:"14px 28px", fontSize:15, fontWeight:700, cursor:"pointer", opacity:saving?0.6:1 }}>
+              {saving ? "Saving…" : "Save Changes"}
+            </button>
+            {savedMsg && <span style={{ color:"var(--green)", fontFamily:"var(--font-mono)", fontSize:13 }}>{savedMsg}</span>}
+          </div>
+        </div>
+      );
+    }
+
+    function DisplayTab({ settings, onSettingsChange }) {
+      const [show, setShow] = useState(!!settings.show_tip_totals_publicly);
+      const [saving, setSaving] = useState(false);
+      const [savedMsg, setSavedMsg] = useState("");
+
+      async function save() {
+        setSaving(true);
+        const err = await saveSettings({ show_tip_totals_publicly: show });
+        setSaving(false);
+        if (!err) {
+          setSavedMsg("Saved!");
+          await onSettingsChange();
+          setTimeout(() => setSavedMsg(""), 2000);
+        }
+      }
+
+      return (
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:20 }}>
+            <div style={{ fontFamily:"var(--font-display)", fontSize:20, color:"var(--green)", letterSpacing:2, marginBottom:16 }}>PUBLIC DISPLAY</div>
+
+            <div onClick={() => setShow(!show)}
+              style={{
+                background: show?"rgba(109,193,53,.1)":"var(--surface)",
+                border:`1px solid ${show?"var(--green)":"var(--border)"}`,
+                borderRadius:12, padding:"16px 20px", cursor:"pointer",
+                display:"flex", alignItems:"center", justifyContent:"space-between",
+              }}>
+              <div>
+                <div style={{ fontWeight:600, fontSize:15, color:show?"var(--green)":"var(--text)" }}>Show tip totals publicly</div>
+                <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>When on, patrons and the big screen see ↑ and ↓ tip amounts on each song</div>
+              </div>
+              <div style={{
+                width:48, height:26, borderRadius:13, padding:3,
+                background: show?"var(--green)":"var(--border)",
+                transition:"all .2s", flexShrink:0,
+              }}>
+                <div style={{
+                  width:20, height:20, borderRadius:"50%", background:"#0d0d0d",
+                  transform: show ? "translateX(22px)" : "translateX(0)",
+                  transition:"transform .2s",
+                }} />
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display:"flex", gap:12, alignItems:"center" }}>
+            <button onClick={save} disabled={saving}
+              style={{ background:"var(--green)", color:"#0d0d0d", border:"none", borderRadius:10, padding:"14px 28px", fontSize:15, fontWeight:700, cursor:"pointer", opacity:saving?0.6:1 }}>
+              {saving ? "Saving…" : "Save Changes"}
+            </button>
+            {savedMsg && <span style={{ color:"var(--green)", fontFamily:"var(--font-mono)", fontSize:13 }}>{savedMsg}</span>}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Root App ─────────────────────────────────────────────────────────────
+    function App() {
+      const [queue, setQueue]       = useState([]);
+      const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+      const [charityTotal, setCharityTotal] = useState(0);
+      const [loaded, setLoaded]     = useState(false);
+      const [view, setView]         = useState("patron");
+
+      const refreshQueue = useCallback(async () => {
         const q = await fetchQueue();
         setQueue(q);
       }, []);
 
-      useEffect(() => {
-        refresh().then(() => setLoaded(true));
+      const refreshSettings = useCallback(async () => {
+        const s = await fetchSettings();
+        setSettings(s);
       }, []);
 
-      // Realtime subscription
+      const refreshCharityTotal = useCallback(async () => {
+        const { data } = await sb.from("tips").select("amount, direction");
+        if (!data) { setCharityTotal(0); return; }
+        // Sum all tips (both directions count toward charity since money was paid)
+        const total = data.reduce((acc, t) => acc + Number(t.amount || 0), 0);
+        setCharityTotal(total);
+      }, []);
+
+      const refreshAll = useCallback(async () => {
+        await Promise.all([refreshQueue(), refreshSettings(), refreshCharityTotal()]);
+      }, [refreshQueue, refreshSettings, refreshCharityTotal]);
+
+      useEffect(() => { refreshAll().then(() => setLoaded(true)); }, [refreshAll]);
+
+      // Realtime subscriptions
       useEffect(() => {
-        const channel = sb.channel("dj_queue_changes")
-          .on("postgres_changes", { event:"*", schema:"public", table:"dj_queue" }, () => refresh())
+        const c1 = sb.channel("dj_queue_changes")
+          .on("postgres_changes", { event:"*", schema:"public", table:"dj_queue" }, () => refreshQueue())
           .subscribe();
-        return () => sb.removeChannel(channel);
-      }, [refresh]);
+        const c2 = sb.channel("settings_changes")
+          .on("postgres_changes", { event:"*", schema:"public", table:"settings" }, () => refreshSettings())
+          .subscribe();
+        const c3 = sb.channel("tips_changes")
+          .on("postgres_changes", { event:"*", schema:"public", table:"tips" }, () => refreshCharityTotal())
+          .subscribe();
+        return () => { sb.removeChannel(c1); sb.removeChannel(c2); sb.removeChannel(c3); };
+      }, [refreshQueue, refreshSettings, refreshCharityTotal]);
 
       if (!loaded) return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -454,9 +1229,9 @@
                 }}>{label}</button>
             ))}
           </div>
-          {view==="patron"  && <PatronView  queue={queue} onRefresh={refresh} />}
-          {view==="display" && <DisplayView queue={queue} />}
-          {view==="admin"   && <AdminView   queue={queue} onRefresh={refresh} />}
+          {view==="patron"  && <PatronView  queue={queue} settings={settings} onRefresh={refreshQueue} />}
+          {view==="display" && <DisplayView queue={queue} settings={settings} charityTotal={charityTotal} />}
+          {view==="admin"   && <AdminView   queue={queue} settings={settings} charityTotal={charityTotal} onRefresh={refreshQueue} onSettingsChange={refreshSettings} />}
         </div>
       );
     }
