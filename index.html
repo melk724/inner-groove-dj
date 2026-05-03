@@ -137,7 +137,7 @@
       );
     }
 
-        function PatronView({ queue, onRefresh, settings }) {
+        function PatronView({ queue, onRefresh, settings, onSettingsChange }) {
       const [step, setStep]     = useState("form");
       const [song, setSong]     = useState("");
       const [artist, setArtist] = useState("");
@@ -185,6 +185,10 @@
         });
         await onRefresh();
         setActionSaving(false);
+        // Track charity raised
+        if (settings.charityMode) {
+          onSettingsChange(s => ({ ...s, charityRaised: (s.charityRaised || 0) + actionTipAmt }));
+        }
         // Show payment screen
         setPendingPayment({
           amount: actionTipAmt,
@@ -198,6 +202,14 @@
         if (!song.trim()) { setError("Song title is required."); return; }
         if (!name.trim()) { setError("Your name is required."); return; }
         if (!allowFree && tipAmt <= 0) { setError(`A ${label.toLowerCase()} is required to submit a request.`); return; }
+        // Duplicate detection
+        const duplicate = queue.find(s => s.song.trim().toLowerCase() === song.trim().toLowerCase());
+        if (duplicate) { setError(`"${duplicate.song}" is already in the queue — tap it below to bump it instead!`); return; }
+        // Request cap
+        if (settings.requestCap > 0) {
+          const existing = queue.filter(s => s.name.trim().toLowerCase() === name.trim().toLowerCase());
+          if (existing.length >= settings.requestCap) { setError(`You've already submitted ${settings.requestCap} song${settings.requestCap > 1 ? "s" : ""} — the limit for tonight. Tip on an existing request instead!`); return; }
+        }
         setError(""); setStep("confirm");
       }
 
@@ -218,6 +230,9 @@
             song_id: newId, song_title: song.trim(),
             action: bump ? "bump_up" : "request",
           });
+          if (settings.charityMode) {
+            onSettingsChange(s => ({ ...s, charityRaised: (s.charityRaised || 0) + tipAmt }));
+          }
         }
         setSaving(false);
         if (err) { setError("Something went wrong. Try again."); setStep("form"); return; }
@@ -450,7 +465,7 @@
     }
 
     // ── Display View ───────────────────────────────────────────────────────────
-    function DisplayView({ queue, leaderboard }) {
+    function DisplayView({ queue, leaderboard, settings, recentlyPlayed }) {
       const [time, setTime] = useState(new Date());
       useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
       const timeStr = time.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
@@ -474,8 +489,13 @@
               </div>
             </div>
             <div style={{ textAlign:"right" }}>
-              <div style={{ fontFamily:"var(--font-mono)", fontSize:44, color:"var(--white)", letterSpacing:2 }}>{timeStr}</div>
-              <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--muted)", marginTop:2 }}>{queue.length} SONGS IN QUEUE</div>
+              {settings.charityMode && settings.charityRaised > 0
+                ? <div style={{ fontFamily:"var(--font-display)", fontSize:44, color:"var(--gold)", letterSpacing:2, animation:"pulse-green 2s ease-in-out infinite" }}>${settings.charityRaised.toFixed(2)} RAISED</div>
+                : <div style={{ fontFamily:"var(--font-mono)", fontSize:44, color:"var(--white)", letterSpacing:2 }}>{timeStr}</div>
+              }
+              <div style={{ fontFamily:"var(--font-mono)", fontSize:12, color:"var(--muted)", marginTop:2 }}>
+                {settings.charityMode && settings.charityName ? settings.charityName.toUpperCase() + " · " : ""}{queue.length} SONGS IN QUEUE
+              </div>
             </div>
           </div>
 
@@ -555,8 +575,13 @@
 
           {/* Ticker */}
           <div style={{ borderTop:"1px solid var(--border)", background:"rgba(109,193,53,.05)", padding:"12px 0", overflow:"hidden" }}>
-            <div style={{ animation:"ticker 30s linear infinite", whiteSpace:"nowrap", display:"inline-block", fontFamily:"var(--font-mono)", fontSize:13, color:"var(--green)", letterSpacing:2 }}>
-              {Array(4).fill("🎵 SCAN THE QR CODE TO REQUEST A SONG  ·  TIP THE DJ TO JUMP THE LINE  ·  INNER GROOVE BREWING  ·  ").join("")}
+            <div style={{ animation:"ticker 35s linear infinite", whiteSpace:"nowrap", display:"inline-block", fontFamily:"var(--font-mono)", fontSize:13, color:"var(--green)", letterSpacing:2 }}>
+              {Array(3).fill(
+                "🎵 SCAN THE QR CODE TO REQUEST A SONG  ·  TIP THE DJ TO JUMP THE LINE  ·  INNER GROOVE BREWING  ·  " +
+                (recentlyPlayed && recentlyPlayed.length > 0
+                  ? "JUST PLAYED: " + recentlyPlayed.slice(0,5).map(s => s.song.toUpperCase() + (s.artist ? " (" + s.artist + ")" : "")).join("  ·  ") + "  ·  "
+                  : "")
+              ).join("")}
             </div>
           </div>
         </div>
@@ -564,7 +589,7 @@
     }
 
     // ── Admin View ─────────────────────────────────────────────────────────────
-    function AdminView({ queue, onRefresh, settings, onSettingsChange }) {
+    function AdminView({ queue, onRefresh, settings, onSettingsChange, onRecentlyPlayed }) {
       const [pin, setPin]           = useState("");
       const [authed, setAuthed]     = useState(false);
       const [confirmDlg, setConfirmDlg] = useState(null);
@@ -604,6 +629,7 @@
       async function markPlayed(entry) {
         await sb.from("dj_queue").delete().eq("id", entry.id);
         setPlayed(p => [entry, ...p]);
+        onRecentlyPlayed(entry);
         await onRefresh();
         showToast(entry);
       }
@@ -727,6 +753,22 @@
                   </div>
                 </div>
 
+                {/* Charity Name + Raised */}
+                {settings.charityMode && (
+                  <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                    <input value={settings.charityName||""} onChange={e => onSettingsChange(s => ({ ...s, charityName: e.target.value }))}
+                      placeholder="Charity name (e.g. Pittsburgh Food Bank)"
+                      style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 12px", color:"var(--text)", fontSize:14, width:"100%", outline:"none", fontFamily:"'DM Sans', sans-serif" }} />
+                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                      <div style={{ fontFamily:"var(--font-mono)", fontSize:13, color:"var(--gold)" }}>💛 ${(settings.charityRaised||0).toFixed(2)} raised tonight</div>
+                      <button onClick={() => { if(confirm("Reset charity total to $0?")) onSettingsChange(s => ({ ...s, charityRaised: 0 })); }}
+                        style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:6, padding:"4px 12px", cursor:"pointer", fontSize:12, fontFamily:"var(--font-mono)" }}>
+                        RESET
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Donation Label - only in standard mode */}
                 {!settings.charityMode && (
                   <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
@@ -777,6 +819,21 @@
                   <div onClick={() => onSettingsChange(s => ({ ...s, bumpDownEnabled: !s.bumpDownEnabled }))}
                     style={{ width:44, height:24, borderRadius:12, background:settings.bumpDownEnabled?"var(--green)":"var(--border)", cursor:"pointer", position:"relative", transition:"background .2s" }}>
                     <div style={{ position:"absolute", top:3, left:settings.bumpDownEnabled?22:3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
+                  </div>
+                </div>
+
+                {/* Request Cap */}
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                  <div>
+                    <div style={{ fontSize:14, color:"var(--text)" }}>🔢 Request Limit per Person</div>
+                    <div style={{ fontSize:11, color:"var(--muted)", marginTop:2 }}>0 = unlimited</div>
+                  </div>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <button onClick={() => onSettingsChange(s => ({ ...s, requestCap: Math.max(0, (s.requestCap||0) - 1) }))}
+                      style={{ width:28, height:28, borderRadius:6, border:"1px solid var(--border)", background:"var(--card)", color:"var(--text)", cursor:"pointer", fontSize:16, fontWeight:700 }}>−</button>
+                    <span style={{ fontFamily:"var(--font-mono)", fontSize:16, color:"var(--green)", minWidth:24, textAlign:"center" }}>{settings.requestCap||0}</span>
+                    <button onClick={() => onSettingsChange(s => ({ ...s, requestCap: (s.requestCap||0) + 1 }))}
+                      style={{ width:28, height:28, borderRadius:6, border:"1px solid var(--border)", background:"var(--card)", color:"var(--text)", cursor:"pointer", fontSize:16, fontWeight:700 }}>+</button>
                   </div>
                 </div>
 
@@ -897,14 +954,18 @@
       const [queue, setQueue]       = useState([]);
       const [rawQueue, setRawQueue] = useState([]);
       const [leaderboard, setLeaderboard] = useState([]);
+      const [recentlyPlayed, setRecentlyPlayed] = useState([]);
       const [loaded, setLoaded]     = useState(false);
       const [view, setView]         = useState("patron");
       const [settings, setSettings] = useState({
         charityMode: false,
+        charityName: "",
+        charityRaised: 0,
         donationLabel: "Tip",
         allowFree: true,
         bumpUpEnabled: true,
         bumpDownEnabled: true,
+        requestCap: 0, // 0 = unlimited
         paymentMethods: {
           venmo:   { enabled: true,  handle: "@InnerGrooveBrewing" },
           paypal:  { enabled: false, handle: "" },
@@ -969,9 +1030,9 @@
                 }}>{label}</button>
             ))}
           </div>
-          {view==="patron"  && <PatronView  queue={queue} onRefresh={refresh} settings={settings} />}
-          {view==="display" && <DisplayView queue={queue} leaderboard={leaderboard} />}
-          {view==="admin"   && <AdminView   queue={rawQueue} onRefresh={refresh} settings={settings} onSettingsChange={setSettings} />}
+          {view==="patron"  && <PatronView  queue={queue} onRefresh={refresh} settings={settings} onSettingsChange={setSettings} />}
+          {view==="display" && <DisplayView queue={queue} leaderboard={leaderboard} settings={settings} recentlyPlayed={recentlyPlayed} />}
+          {view==="admin"   && <AdminView   queue={rawQueue} onRefresh={refresh} settings={settings} onSettingsChange={setSettings} onRecentlyPlayed={entry => setRecentlyPlayed(p => [entry, ...p].slice(0,10))} />}
         </div>
       );
     }
