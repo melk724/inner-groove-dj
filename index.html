@@ -675,8 +675,16 @@
         </div>
       );
 
+      const [activeTab, setActiveTab] = useState("queue");
+
+      const TABS = [
+        { id:"queue",    label:"🎵 Queue"    },
+        { id:"settings", label:"⚙️ Settings"  },
+        { id:"payments", label:"💳 Payments"  },
+      ];
+
       return (
-        <div style={{ minHeight:"100vh", background:"var(--bg)", padding:32 }}>
+        <div style={{ minHeight:"100vh", background:"var(--bg)", paddingBottom:80 }}>
 
           {/* Confirmation Dialog */}
           {confirmDlg && (
@@ -721,24 +729,126 @@
             </div>
           )}
 
-          <div style={{ maxWidth:640, margin:"0 auto" }}>
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:32 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:16 }}>
-                <div>
-                  <div style={{ fontFamily:"var(--font-display)", fontSize:18, color:"var(--green)", letterSpacing:3 }}>INNER GROOVE</div>
-                  <div style={{ fontFamily:"var(--font-display)", fontSize:14, color:"var(--green-dim)", letterSpacing:3 }}>BREWING</div>
+          {/* Header */}
+          <div style={{ background:"var(--surface)", borderBottom:"1px solid var(--border)", padding:"20px 24px 0" }}>
+            <div style={{ maxWidth:640, margin:"0 auto" }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                  <div>
+                    <div style={{ fontFamily:"var(--font-display)", fontSize:16, color:"var(--green)", letterSpacing:3 }}>INNER GROOVE</div>
+                    <div style={{ fontFamily:"var(--font-display)", fontSize:12, color:"var(--green-dim)", letterSpacing:3 }}>BREWING</div>
+                  </div>
+                  <div style={{ fontFamily:"var(--font-display)", fontSize:32, color:"var(--white)", letterSpacing:4 }}>DJ CONSOLE</div>
                 </div>
-                <div style={{ fontFamily:"var(--font-display)", fontSize:36, color:"var(--white)", letterSpacing:4 }}>DJ CONSOLE</div>
+                {activeTab === "queue" && (
+                  <button onClick={() => setConfirmDlg({ action:"clear" })}
+                    style={{ background:"rgba(230,57,70,.1)", border:"1px solid var(--red)", color:"var(--red)", borderRadius:8, padding:"8px 16px", cursor:"pointer", fontSize:12, fontFamily:"var(--font-mono)" }}>
+                    CLEAR ALL
+                  </button>
+                )}
               </div>
-              <button onClick={() => setConfirmDlg({ action:"clear" })}
-                style={{ background:"rgba(230,57,70,.1)", border:"1px solid var(--red)", color:"var(--red)", borderRadius:8, padding:"8px 20px", cursor:"pointer", fontSize:13, fontFamily:"var(--font-mono)" }}>
-                CLEAR ALL
-              </button>
+              {/* Tab bar */}
+              <div style={{ display:"flex", gap:2 }}>
+                {TABS.map(t => (
+                  <button key={t.id} onClick={() => setActiveTab(t.id)}
+                    style={{
+                      flex:1, padding:"10px 8px", border:"none", cursor:"pointer",
+                      fontFamily:"var(--font-mono)", fontSize:11, letterSpacing:1, fontWeight:600,
+                      background:"transparent",
+                      color: activeTab===t.id ? "var(--green)" : "var(--muted)",
+                      borderBottom: activeTab===t.id ? "2px solid var(--green)" : "2px solid transparent",
+                      transition:"all .2s",
+                    }}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
             </div>
+          </div>
 
-            {/* Settings Panel */}
-            <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:20, marginBottom:24 }}>
-              <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--muted)", letterSpacing:2, marginBottom:14 }}>NIGHT SETTINGS</div>
+          {/* Tab Content */}
+          <div style={{ maxWidth:640, margin:"0 auto", padding:"24px 24px 32px" }}>
+
+            {/* ── QUEUE TAB ── */}
+            {activeTab === "queue" && (
+              <div>
+                {queue.length === 0 ? (
+                  <div style={{ textAlign:"center", color:"var(--muted)", padding:"60px 0", fontFamily:"var(--font-mono)" }}>Queue is empty</div>
+                ) : (
+                  <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:32 }}>
+                    {localQueue.map((s,i) => (
+                      <div key={s.id}
+                        draggable
+                        onDragStart={() => setDragIdx(i)}
+                        onDragOver={e => { e.preventDefault(); setDragOver(i); }}
+                        onDrop={() => handleDrop(i)}
+                        onDragEnd={() => { setDragIdx(null); setDragOver(null); }}
+                        style={{
+                          background:"var(--card)",
+                          border:`1px solid ${dragOver===i && dragIdx!==i?"var(--green)":s.bumped?"rgba(109,193,53,.4)":"var(--border)"}`,
+                          borderRadius:12, padding:"16px 20px", display:"flex", alignItems:"center", gap:16,
+                          cursor:"grab", opacity: dragIdx===i ? 0.4 : 1,
+                          transition:"border-color .15s, opacity .15s",
+                          boxShadow: dragOver===i && dragIdx!==i ? "0 0 0 2px var(--green)" : "none",
+                        }}>
+                        <span style={{ color:"var(--muted)", fontSize:18, userSelect:"none" }}>⠿</span>
+                        <span style={{ fontFamily:"var(--font-mono)", fontSize:18, color:i===0?"var(--green)":"var(--muted)", minWidth:28 }}>#{i+1}</span>
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontWeight:600, fontSize:16, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.song}</div>
+                          <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>
+                            {s.artist && `${s.artist} · `}{s.name}
+                            {s.tip > 0 && <span style={{ color:"var(--gold)", marginLeft:8 }}>💰 ${s.tip.toFixed(2)}{s.bumped?" (BUMP)":""}</span>}
+                          </div>
+                        </div>
+                        <div style={{ display:"flex", gap:8 }}>
+                          <button onClick={() => markPlayed(s)}
+                            style={{ background:"rgba(109,193,53,.15)", border:"1px solid var(--green)", color:"var(--green)", borderRadius:6, padding:"6px 14px", cursor:"pointer", fontSize:12, fontFamily:"var(--font-mono)" }}>
+                            ✓ PLAYED
+                          </button>
+                          <button onClick={() => setConfirmDlg({ id:s.id, song:s.song, action:"remove" })}
+                            style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:6, padding:"6px 10px", cursor:"pointer", fontSize:12 }}>
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Recently Played */}
+                {played.length > 0 && (
+                  <div>
+                    <button onClick={() => setShowPlayed(p => !p)}
+                      style={{ background:"transparent", border:"none", color:"var(--muted)", cursor:"pointer", fontFamily:"var(--font-mono)", fontSize:12, letterSpacing:2, display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
+                      {showPlayed ? "▼" : "▶"} RECENTLY PLAYED ({played.length})
+                    </button>
+                    {showPlayed && (
+                      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                        {played.map(s => (
+                          <div key={s.id} style={{
+                            background:"var(--surface)", border:"1px solid var(--border)",
+                            borderRadius:10, padding:"12px 16px", display:"flex", alignItems:"center", gap:12, opacity:.7,
+                          }}>
+                            <span style={{ fontSize:14, color:"var(--muted)" }}>✓</span>
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <div style={{ fontSize:14, fontWeight:500, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", textDecoration:"line-through", color:"var(--muted)" }}>{s.song}</div>
+                              <div style={{ fontSize:11, color:"var(--muted)", marginTop:1 }}>{s.name}{s.artist ? ` · ${s.artist}` : ""}</div>
+                            </div>
+                            <button onClick={() => restoreEntry(s)}
+                              style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:6, padding:"4px 12px", cursor:"pointer", fontSize:11, fontFamily:"var(--font-mono)", whiteSpace:"nowrap" }}>
+                              ↩ RESTORE
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── SETTINGS TAB ── */}
+            {activeTab === "settings" && (
               <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
 
                 {/* Charity Mode */}
@@ -753,14 +863,13 @@
                   </div>
                 </div>
 
-                {/* Charity Name + Raised */}
                 {settings.charityMode && (
-                  <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  <div style={{ display:"flex", flexDirection:"column", gap:8, padding:"12px 16px", background:"rgba(245,200,66,.06)", border:"1px solid rgba(245,200,66,.3)", borderRadius:10 }}>
                     <input value={settings.charityName||""} onChange={e => onSettingsChange(s => ({ ...s, charityName: e.target.value }))}
                       placeholder="Charity name (e.g. Pittsburgh Food Bank)"
                       style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 12px", color:"var(--text)", fontSize:14, width:"100%", outline:"none", fontFamily:"'DM Sans', sans-serif" }} />
                     <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-                      <div style={{ fontFamily:"var(--font-mono)", fontSize:13, color:"var(--gold)" }}>💛 ${(settings.charityRaised||0).toFixed(2)} raised tonight</div>
+                      <div style={{ fontFamily:"var(--font-mono)", fontSize:14, color:"var(--gold)", fontWeight:700 }}>💛 ${(settings.charityRaised||0).toFixed(2)} raised tonight</div>
                       <button onClick={() => { if(confirm("Reset charity total to $0?")) onSettingsChange(s => ({ ...s, charityRaised: 0 })); }}
                         style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:6, padding:"4px 12px", cursor:"pointer", fontSize:12, fontFamily:"var(--font-mono)" }}>
                         RESET
@@ -769,7 +878,8 @@
                   </div>
                 )}
 
-                {/* Donation Label - only in standard mode */}
+                <div style={{ height:1, background:"var(--border)", margin:"4px 0" }} />
+
                 {!settings.charityMode && (
                   <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                     <div style={{ fontSize:14, color:"var(--text)" }}>💰 Call it</div>
@@ -784,7 +894,6 @@
                   </div>
                 )}
 
-                {/* Allow Free Requests - only in standard mode */}
                 {!settings.charityMode && (
                   <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                     <div>
@@ -798,7 +907,6 @@
                   </div>
                 )}
 
-                {/* Bump Up */}
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                   <div>
                     <div style={{ fontSize:14, color:"var(--text)" }}>⬆️ Bump Up</div>
@@ -810,7 +918,6 @@
                   </div>
                 </div>
 
-                {/* Bump Down */}
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                   <div>
                     <div style={{ fontSize:14, color:"var(--text)" }}>⬇️ Bump Down</div>
@@ -822,7 +929,6 @@
                   </div>
                 </div>
 
-                {/* Request Cap */}
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                   <div>
                     <div style={{ fontSize:14, color:"var(--text)" }}>🔢 Request Limit per Person</div>
@@ -838,22 +944,21 @@
                 </div>
 
               </div>
-            </div>
+            )}
 
-            {/* Payment Methods */}
-            <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:20, marginBottom:24 }}>
-              <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--muted)", letterSpacing:2, marginBottom:14 }}>PAYMENT METHODS</div>
-              <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+            {/* ── PAYMENTS TAB ── */}
+            {activeTab === "payments" && (
+              <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
                 {[
-                  { key:"venmo",   label:"💸 Venmo",    placeholder:"@YourHandle" },
-                  { key:"paypal",  label:"🅿️ PayPal",   placeholder:"paypal.me/YourName" },
-                  { key:"cashapp", label:"💚 Cash App",  placeholder:"$YourCashtag" },
-                  { key:"zelle",   label:"⚡ Zelle",     placeholder:"phone or email" },
-                  { key:"cash",    label:"🫙 Cash (tip jar)", placeholder:null },
+                  { key:"venmo",   label:"💸 Venmo",         placeholder:"@YourHandle" },
+                  { key:"paypal",  label:"🅿️ PayPal",         placeholder:"paypal.me/YourName" },
+                  { key:"cashapp", label:"💚 Cash App",        placeholder:"$YourCashtag" },
+                  { key:"zelle",   label:"⚡ Zelle",           placeholder:"phone or email" },
+                  { key:"cash",    label:"🫙 Cash (tip jar)",  placeholder:null },
                 ].map(({ key, label, placeholder }) => (
-                  <div key={key}>
-                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: placeholder && settings.paymentMethods[key]?.enabled ? 8 : 0 }}>
-                      <div style={{ fontSize:14, fontWeight:600, color:settings.paymentMethods[key]?.enabled?"var(--green)":"var(--text)" }}>{label}</div>
+                  <div key={key} style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:"14px 18px" }}>
+                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: placeholder && settings.paymentMethods[key]?.enabled ? 10 : 0 }}>
+                      <div style={{ fontSize:15, fontWeight:600, color:settings.paymentMethods[key]?.enabled?"var(--green)":"var(--text)" }}>{label}</div>
                       <div onClick={() => onSettingsChange(s => ({ ...s, paymentMethods: { ...s.paymentMethods, [key]: { ...s.paymentMethods[key], enabled: !s.paymentMethods[key]?.enabled }}}))}
                         style={{ width:44, height:24, borderRadius:12, background:settings.paymentMethods[key]?.enabled?"var(--green)":"var(--border)", cursor:"pointer", position:"relative", transition:"background .2s", flexShrink:0 }}>
                         <div style={{ position:"absolute", top:3, left:settings.paymentMethods[key]?.enabled?22:3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
@@ -864,86 +969,14 @@
                         value={settings.paymentMethods[key]?.handle || ""}
                         onChange={e => onSettingsChange(s => ({ ...s, paymentMethods: { ...s.paymentMethods, [key]: { ...s.paymentMethods[key], handle: e.target.value }}}))}
                         placeholder={placeholder}
-                        style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 12px", color:"var(--text)", fontSize:14, width:"100%", outline:"none", fontFamily:"'DM Sans', sans-serif" }}
+                        style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 12px", color:"var(--text)", fontSize:14, width:"100%", outline:"none", fontFamily:"'DM Sans', sans-serif" }}
                       />
                     )}
                   </div>
                 ))}
               </div>
-            </div>
-
-            {queue.length === 0 ? (
-              <div style={{ textAlign:"center", color:"var(--muted)", padding:"60px 0", fontFamily:"var(--font-mono)" }}>Queue is empty</div>
-            ) : (
-              <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:32 }}>
-                {localQueue.map((s,i) => (
-                  <div key={s.id}
-                    draggable
-                    onDragStart={() => setDragIdx(i)}
-                    onDragOver={e => { e.preventDefault(); setDragOver(i); }}
-                    onDrop={() => handleDrop(i)}
-                    onDragEnd={() => { setDragIdx(null); setDragOver(null); }}
-                    style={{
-                      background:"var(--card)",
-                      border:`1px solid ${dragOver===i && dragIdx!==i?"var(--green)":s.bumped?"rgba(109,193,53,.4)":"var(--border)"}`,
-                      borderRadius:12, padding:"16px 20px", display:"flex", alignItems:"center", gap:16,
-                      cursor:"grab", opacity: dragIdx===i ? 0.4 : 1,
-                      transition:"border-color .15s, opacity .15s",
-                      boxShadow: dragOver===i && dragIdx!==i ? "0 0 0 2px var(--green)" : "none",
-                    }}>
-                    <span style={{ color:"var(--muted)", fontSize:18, userSelect:"none", cursor:"grab" }}>⠿</span>
-                    <span style={{ fontFamily:"var(--font-mono)", fontSize:18, color:i===0?"var(--green)":"var(--muted)", minWidth:28 }}>#{i+1}</span>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontWeight:600, fontSize:16, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.song}</div>
-                      <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>
-                        {s.artist && `${s.artist} · `}{s.name}
-                        {s.tip > 0 && <span style={{ color:"var(--gold)", marginLeft:8 }}>💰 ${s.tip.toFixed(2)}{s.bumped?" (BUMP)":""}</span>}
-                      </div>
-                    </div>
-                    <div style={{ display:"flex", gap:8 }}>
-                      <button onClick={() => markPlayed(s)}
-                        style={{ background:"rgba(109,193,53,.15)", border:"1px solid var(--green)", color:"var(--green)", borderRadius:6, padding:"6px 14px", cursor:"pointer", fontSize:12, fontFamily:"var(--font-mono)" }}>
-                        ✓ PLAYED
-                      </button>
-                      <button onClick={() => setConfirmDlg({ id:s.id, song:s.song, action:"remove" })}
-                        style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:6, padding:"6px 10px", cursor:"pointer", fontSize:12 }}>
-                        ✕
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
             )}
 
-            {/* Recently Played */}
-            {played.length > 0 && (
-              <div>
-                <button onClick={() => setShowPlayed(p => !p)}
-                  style={{ background:"transparent", border:"none", color:"var(--muted)", cursor:"pointer", fontFamily:"var(--font-mono)", fontSize:12, letterSpacing:2, display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
-                  {showPlayed ? "▼" : "▶"} RECENTLY PLAYED ({played.length})
-                </button>
-                {showPlayed && (
-                  <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                    {played.map(s => (
-                      <div key={s.id} style={{
-                        background:"var(--surface)", border:"1px solid var(--border)",
-                        borderRadius:10, padding:"12px 16px", display:"flex", alignItems:"center", gap:12, opacity:.7,
-                      }}>
-                        <span style={{ fontSize:14, color:"var(--muted)" }}>✓</span>
-                        <div style={{ flex:1, minWidth:0 }}>
-                          <div style={{ fontSize:14, fontWeight:500, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", textDecoration:"line-through", color:"var(--muted)" }}>{s.song}</div>
-                          <div style={{ fontSize:11, color:"var(--muted)", marginTop:1 }}>{s.name}{s.artist ? ` · ${s.artist}` : ""}</div>
-                        </div>
-                        <button onClick={() => restoreEntry(s)}
-                          style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:6, padding:"4px 12px", cursor:"pointer", fontSize:11, fontFamily:"var(--font-mono)", whiteSpace:"nowrap" }}>
-                          ↩ RESTORE
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </div>
       );
