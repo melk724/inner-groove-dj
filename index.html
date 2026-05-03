@@ -67,7 +67,7 @@
 
     async function fetchQueue() {
       const { data } = await sb.from("dj_queue").select("*").order("order_index", { ascending: true }).order("created_at", { ascending: true });
-      return data ? sortQueue(data) : [];
+      return data || [];
     }
 
     // ── Patron View ────────────────────────────────────────────────────────────
@@ -545,12 +545,14 @@
     // ── Root App ───────────────────────────────────────────────────────────────
     function App() {
       const [queue, setQueue]   = useState([]);
+      const [rawQueue, setRawQueue] = useState([]);
       const [loaded, setLoaded] = useState(false);
       const [view, setView]     = useState("patron");
 
       const refresh = useCallback(async () => {
         const q = await fetchQueue();
-        setQueue(q);
+        setQueue(sortQueue(q));
+        setRawQueue(q);
       }, []);
 
       useEffect(() => {
@@ -591,7 +593,7 @@
           </div>
           {view==="patron"  && <PatronView  queue={queue} onRefresh={refresh} />}
           {view==="display" && <DisplayView queue={queue} />}
-          {view==="admin"   && <AdminView   queue={queue} onRefresh={refresh} />}
+          {view==="admin"   && <AdminView   queue={rawQueue} onRefresh={refresh} />}
         </div>
       );
     }
