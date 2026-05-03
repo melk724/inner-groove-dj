@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Inner Groove Brewing — DJ Request Night App: How It Works</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+
+    :root {
+      --bg:        #0d0d0d;
+      --surface:   #161616;
+      --card:      #1e1e1e;
+      --border:    #2e2e2e;
+      --green:     #6dc135;
+      --green-dim: #4a8a22;
+      --white:     #ffffff;
+      --muted:     #8a8a8a;
+      --gold:      #f5c842;
+      --red:       #e63946;
+      --text:      #f0f0f0;
+      --font-display: 'Bebas Neue', sans-serif;
+      --font-mono:    'Space Mono', monospace;
+      --font-body:    'DM Sans', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+      font-family: var(--font-body);
+      color: var(--text);
+      line-height: 1.65;
+      font-size: 16px;
+    }
+
+    .page {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 60px 56px 80px;
+      position: relative;
+    }
+
+    /* Subtle background grid */
+    .grid-bg {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 60px 60px;
+      opacity: .12;
+      z-index: 0;
+    }
+
+    .page > * { position: relative; z-index: 1; }
+
+    /* Brand header */
+    .brand {
+      text-align: center;
+      padding-bottom: 36px;
+      margin-bottom: 48px;
+      border-bottom: 2px solid var(--border);
+    }
+
+    .brand-name {
+      font-family: var(--font-display);
+      font-size: 64px;
+      color: var(--green);
+      letter-spacing: 6px;
+      line-height: 1;
+      text-shadow: 0 0 20px rgba(109,193,53,.4), 0 0 40px rgba(74,138,34,.2);
+    }
+
+    .brand-sub {
+      font-family: var(--font-display);
+      font-size: 30px;
+      color: var(--green-dim);
+      letter-spacing: 10px;
+      margin-top: 4px;
+    }
+
+    .brand-tagline {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 4px;
+      margin-top: 18px;
+    }
+
+    /* Document title */
+    .doc-title {
+      font-family: var(--font-display);
+      font-size: 56px;
+      color: var(--white);
+      letter-spacing: 4px;
+      line-height: 1.05;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+
+    .doc-subtitle {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--green);
+      letter-spacing: 4px;
+      text-align: center;
+      margin-bottom: 56px;
+    }
+
+    /* Section headers */
+    h2 {
+      font-family: var(--font-display);
+      font-size: 32px;
+      color: var(--green);
+      letter-spacing: 3px;
+      margin-top: 56px;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+      page-break-after: avoid;
+    }
+
+    h2:first-of-type { margin-top: 0; }
+
+    h3 {
+      font-family: var(--font-display);
+      font-size: 22px;
+      color: var(--white);
+      letter-spacing: 2px;
+      margin-top: 32px;
+      margin-bottom: 10px;
+      page-break-after: avoid;
+    }
+
+    p { margin-bottom: 14px; color: var(--text); }
+    p + p { margin-top: 0; }
+
+    .lead {
+      font-size: 18px;
+      color: var(--text);
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px 28px;
+      margin: 20px 0;
+      page-break-inside: avoid;
+    }
+
+    .card-green {
+      background: rgba(109,193,53,.06);
+      border: 1px solid rgba(109,193,53,.4);
+      border-left: 4px solid var(--green);
+    }
+
+    .card-gold {
+      background: rgba(245,200,66,.06);
+      border: 1px solid rgba(245,200,66,.4);
+      border-left: 4px solid var(--gold);
+    }
+
+    .card-title {
+      font-family: var(--font-display);
+      font-size: 20px;
+      letter-spacing: 2px;
+      margin-bottom: 10px;
+    }
+
+    .card-green .card-title { color: var(--green); }
+    .card-gold .card-title { color: var(--gold); }
+
+    /* Feature grid */
+    .feature-list {
+      list-style: none;
+      margin: 16px 0;
+    }
+
+    .feature-list li {
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .feature-list li:last-child { border-bottom: none; }
+
+    .feature-icon {
+      font-family: var(--font-mono);
+      color: var(--green);
+      font-size: 18px;
+      min-width: 24px;
+      line-height: 1.4;
+    }
+
+    .feature-text { flex: 1; }
+
+    .feature-text strong {
+      color: var(--white);
+      font-weight: 600;
+    }
+
+    /* Three-up role boxes */
+    .roles { display: flex; flex-direction: row; gap: 14px; margin: 28px 0; }
+
+    .role { flex: 1; background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 18px;
+      text-align: center;
+    }
+
+    .role-icon { font-size: 32px; margin-bottom: 8px; }
+    .role-name {
+      font-family: var(--font-display);
+      font-size: 18px;
+      color: var(--green);
+      letter-spacing: 2px;
+      margin-bottom: 6px;
+    }
+    .role-desc {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    /* Inline accents */
+    .accent { color: var(--green); font-weight: 600; }
+    .gold { color: var(--gold); font-weight: 600; }
+    code, .mono {
+      font-family: var(--font-mono);
+      background: var(--surface);
+      color: var(--green);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 13px;
+      border: 1px solid var(--border);
+    }
+
+    /* Pull quote / callout */
+    .callout {
+      background: var(--surface);
+      border-left: 3px solid var(--green);
+      padding: 14px 20px;
+      margin: 18px 0;
+      font-size: 14px;
+      color: var(--muted);
+      border-radius: 0 6px 6px 0;
+    }
+
+    .callout strong { color: var(--text); }
+
+    /* Footer */
+    .footer {
+      margin-top: 80px;
+      padding-top: 28px;
+      border-top: 2px solid var(--border);
+      text-align: center;
+    }
+
+    .footer-brand {
+      font-family: var(--font-display);
+      font-size: 16px;
+      color: var(--green);
+      letter-spacing: 4px;
+    }
+
+    .footer-meta {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 2px;
+      margin-top: 8px;
+    }
+
+    .footer-built {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 14px;
+      font-style: italic;
+    }
+
+    /* Stat row */
+    .stat-row { display: flex; flex-direction: row; gap: 14px; margin: 24px 0; }
+
+    .stat { flex: 1; text-align: center; padding: 18px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+
+    .stat-num {
+      font-family: var(--font-display);
+      font-size: 36px;
+      color: var(--green);
+      line-height: 1;
+      letter-spacing: 1px;
+    }
+
+    .stat-label {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 2px;
+      margin-top: 6px;
+    }
+
+    /* Print rules */
+    @media print {
+      body { background: white; color: black; }
+      .grid-bg { display: none; }
+      .page { padding: 30px; max-width: none; }
+      .card, .role, .stat, .callout, .footer { page-break-inside: avoid; }
+      h2, h3 { page-break-after: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="grid-bg"></div>
+
+  <div class="page">
+
+    <!-- Brand header -->
+    <div class="brand">
+      <div class="brand-name">INNER GROOVE</div>
+      <div class="brand-sub">BREWING</div>
+      <div class="brand-tagline">DJ REQUEST NIGHT — POWERED BY YOUR PATRONS</div>
+    </div>
+
+    <!-- Document title -->
+    <h1 class="doc-title">HOW IT WORKS</h1>
+    <div class="doc-subtitle">A GUIDE FOR THE OWNERS</div>
+
+    <!-- The pitch -->
+    <p class="lead">
+      The DJ Request Night App turns the brewery's TV into an interactive song queue your patrons control from their phones — they request, they tip to jump the line, and the screen lights up in real time. Built specifically for Inner Groove's vibe and revenue model, it works on any phone with a QR code and runs entirely in a web browser. No app downloads, no logins, no friction.
+    </p>
+
+    <div class="stat-row">
+      <div class="stat">
+        <div class="stat-num">3</div>
+        <div class="stat-label">VIEWS<br/>(PATRON · DJ · BIG SCREEN)</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">$0</div>
+        <div class="stat-label">MONTHLY<br/>HOSTING COST</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">∞</div>
+        <div class="stat-label">REQUESTS<br/>PER NIGHT</div>
+      </div>
+    </div>
+
+    <!-- ──────────────────────────── -->
+    <h2>WHO IT'S FOR</h2>
+    <p>The app has three audiences, each with their own dedicated screen:</p>
+
+    <div class="roles">
+      <div class="role">
+        <div class="role-icon">📱</div>
+        <div class="role-name">PATRONS</div>
+        <div class="role-desc">Scan a QR code at their table. Submit a request, tip if they want, and watch their song climb the queue on the TV.</div>
+      </div>
+      <div class="role">
+        <div class="role-icon">🎛️</div>
+        <div class="role-name">DJ / STAFF</div>
+        <div class="role-desc">PIN-protected console for managing the queue, marking songs played, and configuring everything from payments to charity nights.</div>
+      </div>
+      <div class="role">
+        <div class="role-icon">📺</div>
+        <div class="role-name">THE TV</div>
+        <div class="role-desc">A live, glowing display of what's coming up next, top tippers, and recently played — designed to look great across the bar.</div>
+      </div>
+    </div>
+
+    <!-- ──────────────────────────── -->
+    <h2>THE CORE FEATURES</h2>
+
+    <h3>The Tip-to-Bump Economy</h3>
+    <p>The whole thing runs on an honor-system tipping model. Patrons can:</p>
+    <ul class="feature-list">
+      <li><span class="feature-icon">↑</span><div class="feature-text"><strong>Bump up</strong> — Tip on their own request to jump the line, or tip on someone else's song to push it higher (no more duplicate requests for the same song)</div></li>
+      <li><span class="feature-icon">↓</span><div class="feature-text"><strong>Bump down</strong> — Pay a higher minimum tip to push a song they don't want to hear lower in the queue (creates fun social drama and additional revenue)</div></li>
+      <li><span class="feature-icon">💵</span><div class="feature-text"><strong>Cash at the bar</strong> — Toggle "I'll tip cash" to apply a bump immediately; staff collects when they're at the bar</div></li>
+      <li><span class="feature-icon">📲</span><div class="feature-text"><strong>Multiple payment methods</strong> — Venmo, Cash App, PayPal, Zelle, or any custom URL (full charity donation links work too)</div></li>
+    </ul>
+
+    <h3>Charity Night Mode</h3>
+    <div class="card card-gold">
+      <div class="card-title">💛 BUILT FOR CAUSE-DRIVEN NIGHTS</div>
+      <p>Flip a single switch in admin to transform the entire app into a fundraiser. The header text changes, a custom message identifies the charity, the TV displays a live <span class="gold">$ RAISED</span> counter that grows in real time as patrons tip, and payment methods can be swapped out for the charity's donation links. Reset the counter at the start of each charity event with one button.</p>
+    </div>
+
+    <h3>The Big Screen Experience</h3>
+    <p>Designed to look great on the brewery TV from across the room:</p>
+    <ul class="feature-list">
+      <li><span class="feature-icon">▶</span><div class="feature-text"><strong>Hero "Up Next" card</strong> — The next song shown massive, glowing, with the requester's name highlighted</div></li>
+      <li><span class="feature-icon">📋</span><div class="feature-text"><strong>Coming up queue</strong> — The next 6 songs with current tip totals visible to everyone</div></li>
+      <li><span class="feature-icon">🏆</span><div class="feature-text"><strong>Top tippers leaderboard</strong> — Top 3 generous patrons, crowned with a 👑 emoji on the leader (people will compete for this spot)</div></li>
+      <li><span class="feature-icon">🎵</span><div class="feature-text"><strong>Recently played ticker</strong> — Last 5 songs scroll across the bottom so latecomers know what they missed</div></li>
+    </ul>
+
+    <h3>DJ Console Controls</h3>
+    <p>The PIN-protected admin view gives staff full control:</p>
+    <ul class="feature-list">
+      <li><span class="feature-icon">✓</span><div class="feature-text"><strong>One-tap "Played"</strong> — Marks a song as played, removes it from the live queue, but keeps it in history for charity totals and the recently-played ticker</div></li>
+      <li><span class="feature-icon">⚙️</span><div class="feature-text"><strong>Configurable everything</strong> — Set minimum bump amounts, swap payment methods, set per-person request limits to prevent the queue from being hogged</div></li>
+      <li><span class="feature-icon">🔒</span><div class="feature-text"><strong>Public tip totals toggle</strong> — Hide tip amounts publicly if the brewery wants to keep things low-key, or show them off to drive the bidding war</div></li>
+      <li><span class="feature-icon">↻</span><div class="feature-text"><strong>Real-time everywhere</strong> — Every device updates simultaneously the moment something changes</div></li>
+    </ul>
+
+    <!-- ──────────────────────────── -->
+    <h2>WHY THIS IS GOOD FOR THE BREWERY</h2>
+
+    <div class="card card-green">
+      <div class="card-title">A NEW REVENUE STREAM</div>
+      <p>Every tip is incremental income that wouldn't happen otherwise. The bump-down feature in particular adds a fun, voluntary "hate-tax" that drives competitive tipping. Cash tips at the bar also pull patrons up to order another beer.</p>
+    </div>
+
+    <div class="card card-green">
+      <div class="card-title">PATRONS STAY LONGER</div>
+      <p>Once someone's submitted a request, they're invested in seeing it played. They watch the TV. They order another round while waiting. They pull out their phones again to check the queue.</p>
+    </div>
+
+    <div class="card card-green">
+      <div class="card-title">A CONVERSATION STARTER</div>
+      <p>The TV becomes a focal point. Patrons compare what they requested. They argue about whether to bump down "Wonderwall." They talk to strangers. The brewery becomes more social.</p>
+    </div>
+
+    <div class="card card-green">
+      <div class="card-title">CHARITY NIGHTS BECOME EFFORTLESS</div>
+      <p>One toggle turns the entire experience into a fundraiser with live progress on the screen. The visible <span class="gold">$ RAISED</span> counter creates social pressure — patrons see the number climbing and want to contribute.</p>
+    </div>
+
+    <div class="card card-green">
+      <div class="card-title">ZERO ONGOING COSTS</div>
+      <p>The app runs on free-tier hosting (Vercel + Supabase). No monthly subscription, no per-transaction fees, no licensing. The only "cost" is occasionally maintaining or expanding it, which Brian handles.</p>
+    </div>
+
+    <!-- ──────────────────────────── -->
+    <h2>HOW IT WORKS IN PRACTICE</h2>
+
+    <p><strong>A typical Friday night:</strong></p>
+
+    <div class="callout">
+      <strong>7:00pm</strong> — DJ opens the admin console on a phone or tablet. Confirms the queue is empty from last week. The TV is set to the Display view, glowing in the corner.
+    </div>
+
+    <div class="callout">
+      <strong>7:15pm</strong> — First patron scans the QR code at their table. Requests "Don't Stop Believin'." It pops up on the TV instantly as <span class="accent">UP NEXT</span>.
+    </div>
+
+    <div class="callout">
+      <strong>8:30pm</strong> — Queue has 12 songs. Two patrons each tip $5 to bump their songs higher. A third pays $5 to bump someone else's request <em>down</em>. The TV reflects every change in real time.
+    </div>
+
+    <div class="callout">
+      <strong>9:45pm</strong> — Top tippers leaderboard shows three names, with a 👑 next to the leader at $42. They've ordered three more beers tonight than they would have otherwise.
+    </div>
+
+    <div class="callout">
+      <strong>11:00pm</strong> — DJ marks the last song as played. Charity night totals (if active) get reset for next time. The system auto-archives everything.
+    </div>
+
+    <!-- ──────────────────────────── -->
+    <h2>WHAT IT WON'T DO (BY DESIGN)</h2>
+    <p>A few intentional limits worth being honest about:</p>
+    <ul class="feature-list">
+      <li><span class="feature-icon">·</span><div class="feature-text"><strong>It doesn't search Spotify or pull album art</strong> — Patrons type the song title and artist by hand. This keeps things simple and avoids API costs and failure modes.</div></li>
+      <li><span class="feature-icon">·</span><div class="feature-text"><strong>It doesn't process payments directly</strong> — All tips go through Venmo/Cash App/PayPal on an honor system. The brewery never touches credit card data and there are no transaction fees.</div></li>
+      <li><span class="feature-icon">·</span><div class="feature-text"><strong>It doesn't enforce who plays what</strong> — The DJ always has final say. The queue is a strong suggestion, not a contract.</div></li>
+    </ul>
+
+    <!-- ──────────────────────────── -->
+    <h2>WHAT'S NEXT IF YOU GREEN-LIGHT IT</h2>
+    <p>The app is live and fully functional today at <code>inner-groove-dj.vercel.app</code>. To go from "tested" to "officially launched," we'd want to:</p>
+    <ol style="margin: 14px 0 14px 24px; line-height: 2;">
+      <li>Lock down the admin PIN (currently a placeholder)</li>
+      <li>Confirm the real Venmo / Cash App / PayPal handles for the brewery and any recurring charity partners</li>
+      <li>Print QR codes for each table — small acrylic table-tents work great</li>
+      <li>Pick a launch night to soft-debut, ideally during a slow shift so the staff can get comfortable with the admin console</li>
+    </ol>
+    <p>From there, additional features can be added based on what works at the bar. The list of possibilities is long and the foundation is solid.</p>
+
+    <!-- ──────────────────────────── -->
+    <div class="footer">
+      <div class="footer-brand">INNER GROOVE BREWING</div>
+      <div class="footer-meta">DJ REQUEST NIGHT APP · HOW IT WORKS</div>
+      <div class="footer-built">Built by Brian for Inner Groove Brewing 🤘</div>
+    </div>
+
+  </div>
+</body>
+</html>
