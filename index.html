@@ -274,7 +274,7 @@
             <div style={{ fontFamily:"var(--font-display)", fontSize:30, color:"var(--green-dim)", letterSpacing:8, marginTop:2, marginBottom:6 }}>BREWING</div>
             <div style={{ fontFamily:"var(--font-display)", fontSize:14, color:"var(--muted)", letterSpacing:6 }}>DJ REQUEST NIGHT</div>
           </div>
-          <div style={{ width:"100%", maxWidth:420, display:"flex", flexDirection:"column", gap:16 }}>
+          <div style={{ width:"100%", maxWidth:420, display:"flex", flexDirection:"column", gap:16, paddingBottom:80 }}>
             <div>
               <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Song Title *</label>
               <input value={song} onChange={e => setSong(e.target.value)} placeholder="Bohemian Rhapsody" style={inp} />
