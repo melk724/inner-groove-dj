@@ -116,12 +116,12 @@
                     <span style={{ marginLeft:"auto", opacity:.7 }}>→</span>
                   </a>
                 ) : (
-                  <div key={m.key}
-                    style={{ display:"flex", alignItems:"center", gap:14, background:"rgba(74,138,34,.15)", border:"1px solid var(--green)", color:"var(--green)", fontWeight:600, fontSize:15, padding:"14px 20px", borderRadius:12 }}>
+                  <div key={m.key} onClick={() => onDone()}
+                    style={{ display:"flex", alignItems:"center", gap:14, background:"rgba(74,138,34,.15)", border:"1px solid var(--green)", color:"var(--green)", fontWeight:600, fontSize:15, padding:"14px 20px", borderRadius:12, cursor:"pointer", textAlign:"left", userSelect:"none" }}>
                     <span style={{ fontSize:22 }}>🫙</span>
-                    <div style={{ textAlign:"left" }}>
+                    <div>
                       <div>Drop ${amount.toFixed(2)} in the tip jar</div>
-                      <div style={{ fontSize:12, color:"var(--green-dim)", fontWeight:400, marginTop:2 }}>Honor system — thanks for keeping it real! 🤘</div>
+                      <div style={{ fontSize:12, color:"var(--green-dim)", fontWeight:400, marginTop:2 }}>Tap to confirm — honor system! 🤘</div>
                     </div>
                   </div>
                 )
