@@ -599,7 +599,13 @@
       const [localQueue, setLocalQueue] = useState(queue);
       const [dragIdx, setDragIdx]   = useState(null);
       const [dragOver, setDragOver] = useState(null);
+      const [activeTab, setActiveTab] = useState("queue");
       const ADMIN_PIN = "1234";
+      const TABS = [
+        { id:"queue",    label:"🎵 Queue"    },
+        { id:"settings", label:"⚙️ Settings"  },
+        { id:"payments", label:"💳 Payments"  },
+      ];
 
       // Keep localQueue in sync with incoming queue unless DJ is dragging
       useEffect(() => {
@@ -674,14 +680,6 @@
           </button>
         </div>
       );
-
-      const [activeTab, setActiveTab] = useState("queue");
-
-      const TABS = [
-        { id:"queue",    label:"🎵 Queue"    },
-        { id:"settings", label:"⚙️ Settings"  },
-        { id:"payments", label:"💳 Payments"  },
-      ];
 
       return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", paddingBottom:80 }}>
