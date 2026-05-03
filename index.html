@@ -71,7 +71,7 @@
     }
 
     // ── Patron View ────────────────────────────────────────────────────────────
-    function PatronView({ queue, onRefresh }) {
+    function PatronView({ queue, onRefresh, settings }) {
       const [step, setStep]     = useState("form");
       const [song, setSong]     = useState("");
       const [artist, setArtist] = useState("");
@@ -80,13 +80,39 @@
       const [bump, setBump]     = useState(false);
       const [error, setError]   = useState("");
       const [saving, setSaving] = useState(false);
+      const [selectedSong, setSelectedSong] = useState(null); // for bump/bury modal
+      const [actionType, setActionType]     = useState(null); // "up" or "down"
+      const [actionTip, setActionTip]       = useState("");
+      const [actionName, setActionName]     = useState("");
+      const [actionSaving, setActionSaving] = useState(false);
 
-      const TIP_PRESETS = [0, 2, 5, 10];
+      const label = settings.charityMode ? "Donation" : settings.donationLabel;
+      const allowFree = settings.charityMode ? false : settings.allowFree;
+      const TIP_PRESETS = allowFree ? [0, 2, 5, 10] : [2, 5, 10];
       const tipAmt = parseFloat(tip) || 0;
+
+      async function handleBumpAction() {
+        if (!actionName.trim()) return;
+        const actionTipAmt = parseFloat(actionTip) || 0;
+        if (actionTipAmt <= 0) return;
+        // For bump up: mark the song as bumped with new tip
+        // For bury: we move it down by updating order_index to be after the last song
+        if (actionType === "up") {
+          await sb.from("dj_queue").update({ bumped: true, tip: (selectedSong.tip || 0) + actionTipAmt }).eq("id", selectedSong.id);
+        } else {
+          // bury: get max order_index and set this song to max+1
+          const { data } = await sb.from("dj_queue").select("order_index").order("order_index", { ascending: false }).limit(1);
+          const maxIdx = data && data.length > 0 ? (data[0].order_index || 0) + 1 : 999;
+          await sb.from("dj_queue").update({ order_index: maxIdx }).eq("id", selectedSong.id);
+        }
+        await onRefresh();
+        setSelectedSong(null); setActionType(null); setActionTip(""); setActionName("");
+      }
 
       function handleSubmit() {
         if (!song.trim()) { setError("Song title is required."); return; }
         if (!name.trim()) { setError("Your name is required."); return; }
+        if (!allowFree && tipAmt <= 0) { setError(`A ${label.toLowerCase()} is required to submit a request.`); return; }
         setError(""); setStep("confirm");
       }
 
@@ -120,7 +146,7 @@
           <h2 style={{ fontFamily:"var(--font-display)", fontSize:40, color:"var(--green)", letterSpacing:3, marginBottom:8 }}>REQUEST SUBMITTED!</h2>
           <p style={{ color:"var(--muted)", marginBottom:32, lineHeight:1.6, maxWidth:320 }}>
             <strong style={{ color:"var(--text)" }}>{song}</strong> is in the queue.
-            {tipAmt > 0 && <> Send <strong style={{ color:"var(--gold)" }}>${tipAmt.toFixed(2)}</strong> to lock in your {bump ? "line jump" : "tip"}!</>}
+            {tipAmt > 0 && <> Send <strong style={{ color:"var(--gold)" }}>${tipAmt.toFixed(2)}</strong> to lock in your {bump ? "line jump" : label.toLowerCase()}!</>}
           </p>
           {tipAmt > 0 && (
             <a href={`https://venmo.com/${VENMO_HANDLE}?txn=pay&amount=${tipAmt.toFixed(2)}&note=DJ+Tip+for+${encodeURIComponent(song)}`}
@@ -141,7 +167,7 @@
           <div style={{ width:"100%", maxWidth:420, animation:"slide-up .3s ease" }}>
             <h2 style={{ fontFamily:"var(--font-display)", fontSize:40, color:"var(--green)", letterSpacing:3, marginBottom:24, textAlign:"center" }}>CONFIRM REQUEST</h2>
             <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:16, padding:24, marginBottom:24 }}>
-              {[["Song",song],["Artist",artist||"—"],["Your Name",name],["Tip Amount",tipAmt>0?`$${tipAmt.toFixed(2)}`:"No tip"],["Jump the Line?",bump?"✅ Yes":"No"]].map(([k,v]) => (
+              {[["Song",song],["Artist",artist||"—"],["Your Name",name],[`${label} Amount`,tipAmt>0?`$${tipAmt.toFixed(2)}`:`No ${label.toLowerCase()}`],["Jump the Line?",bump?"✅ Yes":"No"]].map(([k,v]) => (
                 <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"10px 0", borderBottom:"1px solid var(--border)" }}>
                   <span style={{ color:"var(--muted)", fontSize:14 }}>{k}</span>
                   <span style={{ fontWeight:600, color:k==="Tip Amount"?"var(--gold)":"var(--text)" }}>{v}</span>
@@ -181,7 +207,7 @@
               <input value={name} onChange={e => setName(e.target.value)} placeholder="Taylor" style={inp} />
             </div>
             <div>
-              <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Tip Amount</label>
+              <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>{label} Amount{!allowFree && <span style={{color:"var(--red)"}}> *</span>}</label>
               <div style={{ display:"flex", gap:8, marginBottom:8 }}>
                 {TIP_PRESETS.map(p => (
                   <button key={p} onClick={() => setTip(p===0?"":String(p))}
@@ -196,7 +222,7 @@
               <input type="number" min="0" step="0.50" value={tip} onChange={e => setTip(e.target.value)}
                 placeholder="or enter custom amount" style={{ ...inp, fontSize:15 }} />
             </div>
-            {tipAmt > 0 && (
+            {tipAmt > 0 && settings.bumpUpEnabled && (
               <div onClick={() => setBump(!bump)}
                 style={{
                   background:bump?"rgba(109,193,53,.1)":"var(--surface)",
@@ -206,7 +232,7 @@
                 }}>
                 <div>
                   <div style={{ fontWeight:600, fontSize:15, color:bump?"var(--green)":"var(--text)" }}>⚡ Jump the Line</div>
-                  <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>Use your tip to move up in the queue</div>
+                  <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>Use your {label.toLowerCase()} to move up in the queue</div>
                 </div>
                 <div style={{
                   width:24, height:24, borderRadius:"50%",
@@ -228,18 +254,99 @@
             </button>
             {queue.length > 0 && (
               <div style={{ marginTop:8 }}>
-                <div style={{ fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", fontFamily:"var(--font-mono)", marginBottom:10 }}>Current Queue ({queue.length})</div>
-                {queue.slice(0,4).map((s,i) => (
-                  <div key={s.id} style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
+                <div style={{ fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", fontFamily:"var(--font-mono)", marginBottom:10 }}>
+                  Current Queue ({queue.length}){(settings.bumpUpEnabled||settings.bumpDownEnabled) && <span style={{ marginLeft:8, color:"var(--green)" }}>· tap to bump</span>}
+                </div>
+                {queue.slice(0,6).map((s,i) => (
+                  <div key={s.id}
+                    onClick={() => { if(settings.bumpUpEnabled||settings.bumpDownEnabled){ setSelectedSong(s); setActionType(null); setActionTip(""); setActionName(""); }}}
+                    style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 8px", borderBottom:"1px solid var(--border)", borderRadius:6, cursor:(settings.bumpUpEnabled||settings.bumpDownEnabled)?"pointer":"default", transition:"background .15s" }}
+                    onMouseEnter={e => e.currentTarget.style.background="rgba(255,255,255,.03)"}
+                    onMouseLeave={e => e.currentTarget.style.background="transparent"}>
                     <span style={{ fontFamily:"var(--font-mono)", fontSize:12, color:i===0?"var(--green)":"var(--muted)", minWidth:20 }}>{i+1}</span>
                     <div style={{ flex:1, minWidth:0 }}>
                       <div style={{ fontSize:14, fontWeight:500, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.song}</div>
                       <div style={{ fontSize:12, color:"var(--muted)" }}>{s.name}{s.artist?` · ${s.artist}`:""}</div>
                     </div>
-                    {s.bumped && <span style={{ fontSize:10, color:"var(--green)", border:"1px solid var(--green)", borderRadius:4, padding:"2px 6px", fontFamily:"var(--font-mono)" }}>BUMP</span>}
+                    {s.bumped && <span style={{ fontSize:10, color:"var(--green)", border:"1px solid var(--green)", borderRadius:4, padding:"2px 6px", fontFamily:"var(--font-mono)" }}>⚡</span>}
+                    {(settings.bumpUpEnabled||settings.bumpDownEnabled) && <span style={{ fontSize:16, color:"var(--muted)" }}>›</span>}
                   </div>
                 ))}
-                {queue.length > 4 && <div style={{ fontSize:12, color:"var(--muted)", textAlign:"center", padding:"8px 0" }}>+{queue.length-4} more</div>}
+                {queue.length > 6 && <div style={{ fontSize:12, color:"var(--muted)", textAlign:"center", padding:"8px 0" }}>+{queue.length-6} more</div>}
+              </div>
+            )}
+
+            {/* Bump/Bury Modal */}
+            {selectedSong && (
+              <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.8)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:9999, padding:"0 0 0 0" }}
+                onClick={e => { if(e.target===e.currentTarget){ setSelectedSong(null); setActionType(null); }}}>
+                <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:"20px 20px 0 0", padding:28, width:"100%", maxWidth:480, animation:"slide-up .25s ease" }}>
+                  <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--muted)", letterSpacing:2, marginBottom:4 }}>SELECTED</div>
+                  <div style={{ fontWeight:700, fontSize:18, marginBottom:4 }}>{selectedSong.song}</div>
+                  <div style={{ fontSize:13, color:"var(--muted)", marginBottom:20 }}>{selectedSong.name}{selectedSong.artist?` · ${selectedSong.artist}`:""}</div>
+
+                  {!actionType ? (
+                    <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                      {settings.bumpUpEnabled && (
+                        <button onClick={() => setActionType("up")}
+                          style={{ background:"rgba(109,193,53,.1)", border:"1px solid var(--green)", color:"var(--green)", borderRadius:12, padding:"14px 20px", cursor:"pointer", fontSize:15, fontWeight:600, textAlign:"left", display:"flex", alignItems:"center", gap:12 }}>
+                          <span style={{ fontSize:20 }}>⬆️</span>
+                          <div>
+                            <div>Bump Up</div>
+                            <div style={{ fontSize:12, color:"var(--green-dim)", fontWeight:400 }}>Add a {label.toLowerCase()} to move this song earlier</div>
+                          </div>
+                        </button>
+                      )}
+                      {settings.bumpDownEnabled && (
+                        <button onClick={() => setActionType("down")}
+                          style={{ background:"rgba(230,57,70,.07)", border:"1px solid rgba(230,57,70,.4)", color:"#e63946", borderRadius:12, padding:"14px 20px", cursor:"pointer", fontSize:15, fontWeight:600, textAlign:"left", display:"flex", alignItems:"center", gap:12 }}>
+                          <span style={{ fontSize:20 }}>⬇️</span>
+                          <div>
+                            <div>Bury It</div>
+                            <div style={{ fontSize:12, color:"rgba(230,57,70,.6)", fontWeight:400 }}>Add a {label.toLowerCase()} to push this song to the back</div>
+                          </div>
+                        </button>
+                      )}
+                      <button onClick={() => setSelectedSong(null)}
+                        style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:10, padding:"10px 20px", cursor:"pointer", fontSize:14 }}>
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+                      <div style={{ background: actionType==="up"?"rgba(109,193,53,.08)":"rgba(230,57,70,.08)", border:`1px solid ${actionType==="up"?"var(--green)":"rgba(230,57,70,.4)"}`, borderRadius:10, padding:"10px 14px", fontSize:13, color:"var(--muted)" }}>
+                        {actionType==="up" ? `⬆️ Bumping up: ${selectedSong.song}` : `⬇️ Burying: ${selectedSong.song}`}
+                      </div>
+                      <div>
+                        <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Your Name *</label>
+                        <input value={actionName} onChange={e => setActionName(e.target.value)} placeholder="Taylor"
+                          style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 16px", color:"var(--text)", fontSize:16, width:"100%", outline:"none", fontFamily:"'DM Sans', sans-serif" }} />
+                      </div>
+                      <div>
+                        <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>{label} Amount *</label>
+                        <div style={{ display:"flex", gap:8, marginBottom:8 }}>
+                          {[2,5,10].map(p => (
+                            <button key={p} onClick={() => setActionTip(String(p))}
+                              style={{ flex:1, padding:"10px 0", borderRadius:8, cursor:"pointer", fontSize:14, fontWeight:600, border:`1px solid ${parseFloat(actionTip)===p?"var(--green)":"var(--border)"}`, background:parseFloat(actionTip)===p?"rgba(109,193,53,.15)":"var(--surface)", color:parseFloat(actionTip)===p?"var(--green)":"var(--muted)" }}>
+                              ${p}
+                            </button>
+                          ))}
+                        </div>
+                        <input type="number" min="1" step="0.50" value={actionTip} onChange={e => setActionTip(e.target.value)}
+                          placeholder="or enter amount"
+                          style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 16px", color:"var(--text)", fontSize:15, width:"100%", outline:"none", fontFamily:"'DM Sans', sans-serif" }} />
+                      </div>
+                      <div style={{ display:"flex", gap:10 }}>
+                        <button onClick={() => setActionType(null)}
+                          style={{ flex:1, background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:10, padding:12, cursor:"pointer", fontSize:14 }}>← Back</button>
+                        <button onClick={handleBumpAction} disabled={actionSaving || !actionName.trim() || (parseFloat(actionTip)||0)<=0}
+                          style={{ flex:2, background:actionType==="up"?"var(--green)":"var(--red)", color:"#fff", border:"none", borderRadius:10, padding:12, cursor:"pointer", fontSize:15, fontWeight:700, opacity:(actionSaving||!actionName.trim()||(parseFloat(actionTip)||0)<=0)?0.5:1 }}>
+                          {actionSaving ? "Saving…" : actionType==="up" ? `⬆️ Bump Up` : `⬇️ Bury It`}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -319,7 +426,7 @@
     }
 
     // ── Admin View ─────────────────────────────────────────────────────────────
-    function AdminView({ queue, onRefresh }) {
+    function AdminView({ queue, onRefresh, settings, onSettingsChange }) {
       const [pin, setPin]           = useState("");
       const [authed, setAuthed]     = useState(false);
       const [confirmDlg, setConfirmDlg] = useState(null);
@@ -465,6 +572,79 @@
               </button>
             </div>
 
+            {/* Settings Panel */}
+            <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:20, marginBottom:24 }}>
+              <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--muted)", letterSpacing:2, marginBottom:14 }}>NIGHT SETTINGS</div>
+              <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+
+                {/* Charity Mode */}
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                  <div>
+                    <div style={{ fontSize:14, fontWeight:600, color:settings.charityMode?"var(--green)":"var(--text)" }}>🎗️ Charity Mode</div>
+                    <div style={{ fontSize:11, color:"var(--muted)", marginTop:2 }}>All requests require a donation</div>
+                  </div>
+                  <div onClick={() => onSettingsChange(s => ({ ...s, charityMode: !s.charityMode }))}
+                    style={{ width:44, height:24, borderRadius:12, background:settings.charityMode?"var(--green)":"var(--border)", cursor:"pointer", position:"relative", transition:"background .2s" }}>
+                    <div style={{ position:"absolute", top:3, left:settings.charityMode?22:3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
+                  </div>
+                </div>
+
+                {/* Donation Label - only in standard mode */}
+                {!settings.charityMode && (
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                    <div style={{ fontSize:14, color:"var(--text)" }}>💰 Call it</div>
+                    <div style={{ display:"flex", gap:6 }}>
+                      {["Tip","Donation"].map(opt => (
+                        <button key={opt} onClick={() => onSettingsChange(s => ({ ...s, donationLabel: opt }))}
+                          style={{ padding:"4px 14px", borderRadius:20, border:`1px solid ${settings.donationLabel===opt?"var(--green)":"var(--border)"}`, background:settings.donationLabel===opt?"rgba(109,193,53,.15)":"transparent", color:settings.donationLabel===opt?"var(--green)":"var(--muted)", cursor:"pointer", fontSize:13, fontWeight:600 }}>
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Allow Free Requests - only in standard mode */}
+                {!settings.charityMode && (
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                    <div>
+                      <div style={{ fontSize:14, color:"var(--text)" }}>🆓 Allow free requests</div>
+                      <div style={{ fontSize:11, color:"var(--muted)", marginTop:2 }}>Patrons can submit without tipping</div>
+                    </div>
+                    <div onClick={() => onSettingsChange(s => ({ ...s, allowFree: !s.allowFree }))}
+                      style={{ width:44, height:24, borderRadius:12, background:settings.allowFree?"var(--green)":"var(--border)", cursor:"pointer", position:"relative", transition:"background .2s" }}>
+                      <div style={{ position:"absolute", top:3, left:settings.allowFree?22:3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
+                    </div>
+                  </div>
+                )}
+
+                {/* Bump Up */}
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                  <div>
+                    <div style={{ fontSize:14, color:"var(--text)" }}>⬆️ Bump Up</div>
+                    <div style={{ fontSize:11, color:"var(--muted)", marginTop:2 }}>Patrons can tip to jump the line</div>
+                  </div>
+                  <div onClick={() => onSettingsChange(s => ({ ...s, bumpUpEnabled: !s.bumpUpEnabled }))}
+                    style={{ width:44, height:24, borderRadius:12, background:settings.bumpUpEnabled?"var(--green)":"var(--border)", cursor:"pointer", position:"relative", transition:"background .2s" }}>
+                    <div style={{ position:"absolute", top:3, left:settings.bumpUpEnabled?22:3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
+                  </div>
+                </div>
+
+                {/* Bump Down */}
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                  <div>
+                    <div style={{ fontSize:14, color:"var(--text)" }}>⬇️ Bump Down</div>
+                    <div style={{ fontSize:11, color:"var(--muted)", marginTop:2 }}>Patrons can tip to bury a song</div>
+                  </div>
+                  <div onClick={() => onSettingsChange(s => ({ ...s, bumpDownEnabled: !s.bumpDownEnabled }))}
+                    style={{ width:44, height:24, borderRadius:12, background:settings.bumpDownEnabled?"var(--green)":"var(--border)", cursor:"pointer", position:"relative", transition:"background .2s" }}>
+                    <div style={{ position:"absolute", top:3, left:settings.bumpDownEnabled?22:3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
             {queue.length === 0 ? (
               <div style={{ textAlign:"center", color:"var(--muted)", padding:"60px 0", fontFamily:"var(--font-mono)" }}>Queue is empty</div>
             ) : (
@@ -548,6 +728,13 @@
       const [rawQueue, setRawQueue] = useState([]);
       const [loaded, setLoaded] = useState(false);
       const [view, setView]     = useState("patron");
+      const [settings, setSettings] = useState({
+        charityMode: false,
+        donationLabel: "Tip",      // "Tip" or "Donation"
+        allowFree: true,           // allow $0 requests
+        bumpUpEnabled: true,       // patrons can bump up
+        bumpDownEnabled: true,     // patrons can bury
+      });
 
       const refresh = useCallback(async () => {
         const q = await fetchQueue();
@@ -591,9 +778,9 @@
                 }}>{label}</button>
             ))}
           </div>
-          {view==="patron"  && <PatronView  queue={queue} onRefresh={refresh} />}
+          {view==="patron"  && <PatronView  queue={queue} onRefresh={refresh} settings={settings} />}
           {view==="display" && <DisplayView queue={queue} />}
-          {view==="admin"   && <AdminView   queue={rawQueue} onRefresh={refresh} />}
+          {view==="admin"   && <AdminView   queue={rawQueue} onRefresh={refresh} settings={settings} onSettingsChange={setSettings} />}
         </div>
       );
     }
