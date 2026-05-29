@@ -8,7 +8,6 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap');
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -482,17 +481,8 @@
 
     // ── QR Code Component ──────────────────────────────────────────────────────
     function QRCode({ url, size = 160 }) {
-      const canvasRef = React.useRef(null);
-      useEffect(() => {
-        if (canvasRef.current && window.QRCode) {
-          window.QRCode.toCanvas(canvasRef.current, url, {
-            width: size,
-            margin: 2,
-            color: { dark: "#0d0d0d", light: "#ffffff" },
-          });
-        }
-      }, [url, size]);
-      return <canvas ref={canvasRef} style={{ borderRadius: 8, display:"block" }} />;
+      const src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}&bgcolor=ffffff&color=0d0d0d&margin=10`;
+      return <img src={src} alt="QR Code" style={{ width:size, height:size, borderRadius:8, display:"block" }} />;
     }
 
         // ── Display View ───────────────────────────────────────────────────────────
