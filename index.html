@@ -92,7 +92,7 @@
           : `DJ+${label}+for+${encodeURIComponent(songTitle)}`;
 
       const methods = [
-        pm.venmo?.enabled   && { key:"venmo",   label:"Venmo",   color:"#3d95ce", emoji:"💸", url:`https://venmo.com/${pm.venmo.handle}?txn=pay&amount=${amount.toFixed(2)}&note=${note}` },
+        pm.venmo?.enabled   && { key:"venmo",   label:"Venmo",   color:"#3d95ce", emoji:"💸", url:`https://venmo.com/${pm.venmo.handle.replace(/^@/,"")}?txn=pay&amount=${amount.toFixed(2)}&note=${note}` },
         pm.paypal?.enabled  && { key:"paypal",  label:"PayPal",  color:"#003087", emoji:"🅿️",  url:`https://www.paypal.com/paypalme/${pm.paypal.handle.replace(/^@/,"")}/${amount.toFixed(2)}` },
         pm.cashapp?.enabled && { key:"cashapp", label:"Cash App", color:"#00d64f", emoji:"💚", url:`https://cash.app/${pm.cashapp.handle}/${amount.toFixed(2)}` },
         pm.zelle?.enabled   && { key:"zelle",   label:"Zelle",   color:"#6d1ed4", emoji:"⚡", url:`https://enroll.zellepay.com/qr-codes?data=${encodeURIComponent(JSON.stringify({name:"Inner Groove Brewing",token:pm.zelle.handle}))}` },
@@ -153,6 +153,7 @@
       const [name, setName]     = useState("");
       const [tip, setTip]       = useState("");
       const [bump, setBump]     = useState(false);
+      const [message, setMessage] = useState("");
       const [error, setError]   = useState("");
       const [saving, setSaving] = useState(false);
       const [selectedSong, setSelectedSong] = useState(null);
@@ -231,6 +232,7 @@
           id: newId, song: song.trim(), artist: artist.trim(),
           name: name.trim(), tip: tipAmt, bumped: bump, order_index: nextIdx,
           last_action: bump ? "bump_up" : null,
+          message: message.trim() || null,
         });
         if (!err && tipAmt > 0) {
           await sb.from("donations_log").insert({
@@ -263,7 +265,7 @@
           songTitle={song}
           action="request"
           paymentMethods={settings.paymentMethods}
-          onDone={() => { setSong(""); setArtist(""); setName(""); setTip(""); setBump(false); setStep("form"); }}
+          onDone={() => { setSong(""); setArtist(""); setName(""); setTip(""); setBump(false); setMessage(""); setStep("form"); }}
         />
       );
 
@@ -272,7 +274,7 @@
           <div style={{ width:"100%", maxWidth:420, animation:"slide-up .3s ease" }}>
             <h2 style={{ fontFamily:"var(--font-display)", fontSize:40, color:"var(--green)", letterSpacing:3, marginBottom:24, textAlign:"center" }}>CONFIRM REQUEST</h2>
             <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:16, padding:24, marginBottom:24 }}>
-              {[["Song",song],["Artist",artist||"—"],["Your Name",name],[`${label} Amount`,tipAmt>0?`$${tipAmt.toFixed(2)}`:`No ${label.toLowerCase()}`],["Jump the Line?",bump?"✅ Yes":"No"]].map(([k,v]) => (
+              {[["Song",song],["Artist",artist||"—"],["Your Name",name],[`${label} Amount`,tipAmt>0?`$${tipAmt.toFixed(2)}`:`No ${label.toLowerCase()}`],["Jump the Line?",bump?"✅ Yes":"No"],...(message.trim()?[["Message 💌",message]]:[])].map(([k,v]) => (
                 <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"10px 0", borderBottom:"1px solid var(--border)" }}>
                   <span style={{ color:"var(--muted)", fontSize:14 }}>{k}</span>
                   <span style={{ fontWeight:600, color:k==="Tip Amount"?"var(--gold)":"var(--text)" }}>{v}</span>
@@ -310,6 +312,10 @@
             <div>
               <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Your Name *</label>
               <input value={name} onChange={e => setName(e.target.value)} placeholder="Taylor" style={inp} />
+            </div>
+            <div>
+              <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Message / Dedication <span style={{ color:"var(--muted)", fontSize:10, letterSpacing:1 }}>(optional · DJ only)</span></label>
+              <input value={message} onChange={e => setMessage(e.target.value)} placeholder="This one's for my wife — happy anniversary! 🎉" style={{ ...inp, fontSize:14 }} />
             </div>
             <div>
               <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>{label} Amount{!allowFree && <span style={{color:"var(--red)"}}> *</span>}</label>
@@ -806,6 +812,7 @@
                             {s.artist && `${s.artist} · `}{s.name}
                             {s.tip > 0 && <span style={{ color:"var(--gold)", marginLeft:8 }}>💰 ${s.tip.toFixed(2)}{s.bumped?" (BUMP)":""}</span>}
                           </div>
+                          {s.message && <div style={{ fontSize:12, color:"var(--green-dim)", marginTop:4, fontStyle:"italic", background:"rgba(109,193,53,.06)", borderRadius:4, padding:"3px 8px", display:"inline-block" }}>💌 {s.message}</div>}
                         </div>
                         <div style={{ display:"flex", gap:8 }}>
                           <button onClick={() => markPlayed(s)}
@@ -1103,7 +1110,7 @@
           </div>
           {view==="patron"  && <PatronView  queue={queue} onRefresh={refresh} settings={settings} onSettingsChange={setSettings} />}
           {view==="display" && <DisplayView queue={queue} leaderboard={leaderboard} settings={settings} recentlyPlayed={recentlyPlayed} />}
-          {view==="admin"   && <AdminView   queue={rawQueue} onRefresh={refresh} settings={settings} onSettingsChange={setSettings} onRecentlyPlayed={entry => setRecentlyPlayed(p => [entry, ...p].slice(0,10))} />}
+          {view==="admin"   && <AdminView   queue={sortQueue(rawQueue)} onRefresh={refresh} settings={settings} onSettingsChange={setSettings} onRecentlyPlayed={entry => setRecentlyPlayed(p => [entry, ...p].slice(0,10))} />}
         </div>
       );
     }
