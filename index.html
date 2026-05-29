@@ -70,6 +70,15 @@
       return data || [];
     }
 
+    async function fetchSettings() {
+      const { data } = await sb.from("dj_settings").select("settings").eq("id", "singleton").single();
+      return data ? data.settings : null;
+    }
+
+    async function persistSettings(s) {
+      await sb.from("dj_settings").update({ settings: s, updated_at: new Date().toISOString() }).eq("id", "singleton");
+    }
+
     // ── Patron View ────────────────────────────────────────────────────────────
     // ── Payment Screen ─────────────────────────────────────────────────────────
     function PaymentScreen({ amount, label, songTitle, action, paymentMethods, onDone }) {
@@ -988,7 +997,7 @@
       const [recentlyPlayed, setRecentlyPlayed] = useState([]);
       const [loaded, setLoaded]     = useState(false);
       const [view, setView]         = useState("patron");
-      const [settings, setSettings] = useState({
+      const [settings, setSettingsState] = useState({
         charityMode: false,
         charityName: "",
         charityRaised: 0,
@@ -996,7 +1005,7 @@
         allowFree: true,
         bumpUpEnabled: true,
         bumpDownEnabled: true,
-        requestCap: 0, // 0 = unlimited
+        requestCap: 0,
         paymentMethods: {
           venmo:   { enabled: true,  handle: "@InnerGrooveBrewing" },
           paypal:  { enabled: false, handle: "" },
@@ -1005,6 +1014,32 @@
           cash:    { enabled: true,  handle: "" },
         },
       });
+
+      function setSettings(updater) {
+        setSettingsState(prev => {
+          const next = typeof updater === "function" ? updater(prev) : updater;
+          persistSettings(next);
+          return next;
+        });
+      }
+
+      const DEFAULT_SETTINGS = {
+        charityMode: false,
+        charityName: "",
+        charityRaised: 0,
+        donationLabel: "Tip",
+        allowFree: true,
+        bumpUpEnabled: true,
+        bumpDownEnabled: true,
+        requestCap: 0,
+        paymentMethods: {
+          venmo:   { enabled: true,  handle: "@InnerGrooveBrewing" },
+          paypal:  { enabled: false, handle: "" },
+          cashapp: { enabled: false, handle: "" },
+          zelle:   { enabled: false, handle: "" },
+          cash:    { enabled: true,  handle: "" },
+        },
+      };
 
       async function fetchLeaderboard() {
         const { data } = await sb.from("donations_log").select("donor_name, amount");
@@ -1019,10 +1054,15 @@
       }
 
       const refresh = useCallback(async () => {
-        const [q, lb] = await Promise.all([fetchQueue(), fetchLeaderboard()]);
+        const [q, lb, savedSettings] = await Promise.all([fetchQueue(), fetchLeaderboard(), fetchSettings()]);
         setQueue(sortQueue(q));
         setRawQueue(q);
         setLeaderboard(lb);
+        if (savedSettings && Object.keys(savedSettings).length > 0) {
+          setSettings(s => ({ ...DEFAULT_SETTINGS, ...s, ...savedSettings,
+            paymentMethods: { ...DEFAULT_SETTINGS.paymentMethods, ...(savedSettings.paymentMethods || {}) }
+          }));
+        }
       }, []);
 
       useEffect(() => {
