@@ -488,6 +488,27 @@
         // ── Display View ───────────────────────────────────────────────────────────
     function DisplayView({ queue, leaderboard, settings, recentlyPlayed }) {
       const [time, setTime] = useState(new Date());
+
+      // Keep screen awake while display is active
+      useEffect(() => {
+        let wakeLock = null;
+        async function requestWakeLock() {
+          try {
+            if ("wakeLock" in navigator) {
+              wakeLock = await navigator.wakeLock.request("screen");
+            }
+          } catch(e) { /* silently fail if not supported */ }
+        }
+        requestWakeLock();
+        // Re-acquire wake lock if page becomes visible again
+        const handleVisibility = () => { if (document.visibilityState === "visible") requestWakeLock(); };
+        document.addEventListener("visibilitychange", handleVisibility);
+        return () => {
+          document.removeEventListener("visibilitychange", handleVisibility);
+          if (wakeLock) wakeLock.release();
+        };
+      }, []);
+
       useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
       const timeStr = time.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
 
