@@ -300,7 +300,40 @@
             <div style={{ fontFamily:"var(--font-display)", fontSize:30, color:"var(--green-dim)", letterSpacing:8, marginTop:2, marginBottom:6 }}>BREWING</div>
             <div style={{ fontFamily:"var(--font-display)", fontSize:14, color:"var(--muted)", letterSpacing:6 }}>DJ REQUEST NIGHT</div>
           </div>
-          <div style={{ width:"100%", maxWidth:420, display:"flex", flexDirection:"column", gap:16, paddingBottom:80 }}>
+
+          {/* Requests closed banner */}
+          {!settings.requestsOpen && (
+            <div style={{ width:"100%", maxWidth:420, marginBottom:20, background:"rgba(230,57,70,.1)", border:"2px solid var(--red)", borderRadius:14, padding:"20px 24px", textAlign:"center" }}>
+              <div style={{ fontFamily:"var(--font-display)", fontSize:32, color:"var(--red)", letterSpacing:3, marginBottom:6 }}>🔴 REQUESTS CLOSED</div>
+              <div style={{ color:"var(--muted)", fontSize:14, lineHeight:1.6, marginBottom: settings.charityMode && settings.charityName ? 16 : 0 }}>
+                The DJ isn't taking new requests right now. Check back soon!
+              </div>
+              {settings.charityMode && settings.charityName && (
+                <div style={{ marginTop:12, paddingTop:12, borderTop:"1px solid rgba(230,57,70,.3)" }}>
+                  <div style={{ fontSize:13, color:"var(--muted)", marginBottom:10 }}>While you wait, consider a donation to</div>
+                  <div style={{ fontFamily:"var(--font-display)", fontSize:20, color:"var(--gold)", letterSpacing:2, marginBottom:12 }}>{settings.charityName}</div>
+                  {Object.entries(settings.paymentMethods || {}).filter(([,v]) => v.enabled && v.handle).map(([key, v]) => {
+                    const urls = {
+                      venmo:   `https://venmo.com/${v.handle.replace(/^@/,"")}`,
+                      paypal:  `https://www.paypal.com/paypalme/${v.handle.replace(/^@/,"")}`,
+                      cashapp: `https://cash.app/${v.handle}`,
+                      zelle:   `https://enroll.zellepay.com`,
+                    };
+                    const labels = { venmo:"💸 Donate via Venmo", paypal:"🅿️ Donate via PayPal", cashapp:"💚 Donate via Cash App", zelle:"⚡ Donate via Zelle" };
+                    if (!urls[key]) return null;
+                    return (
+                      <a key={key} href={urls[key]} target="_blank" rel="noreferrer"
+                        style={{ display:"block", background:"rgba(245,200,66,.15)", border:"1px solid rgba(245,200,66,.4)", color:"var(--gold)", fontWeight:600, fontSize:14, padding:"10px 16px", borderRadius:10, textDecoration:"none", marginBottom:8 }}>
+                        {labels[key]}
+                      </a>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ width:"100%", maxWidth:420, display:"flex", flexDirection:"column", gap:16, paddingBottom:80, opacity: settings.requestsOpen ? 1 : 0.3, pointerEvents: settings.requestsOpen ? "auto" : "none" }}>
             <div>
               <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Song Title *</label>
               <input value={song} onChange={e => setSong(e.target.value)} placeholder="Bohemian Rhapsody" style={inp} />
@@ -820,6 +853,27 @@
             {/* ── QUEUE TAB ── */}
             {activeTab === "queue" && (
               <div>
+                {/* Requests Open/Closed toggle */}
+                <div onClick={() => onSettingsChange(s => ({ ...s, requestsOpen: !s.requestsOpen }))}
+                  style={{
+                    display:"flex", alignItems:"center", justifyContent:"space-between",
+                    background: settings.requestsOpen ? "rgba(109,193,53,.1)" : "rgba(230,57,70,.1)",
+                    border: `2px solid ${settings.requestsOpen ? "var(--green)" : "var(--red)"}`,
+                    borderRadius:12, padding:"16px 20px", cursor:"pointer", marginBottom:20, transition:"all .2s",
+                  }}>
+                  <div>
+                    <div style={{ fontFamily:"var(--font-display)", fontSize:22, letterSpacing:3, color: settings.requestsOpen ? "var(--green)" : "var(--red)" }}>
+                      {settings.requestsOpen ? "🟢 REQUESTS OPEN" : "🔴 REQUESTS CLOSED"}
+                    </div>
+                    <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>
+                      {settings.requestsOpen ? "Tap to close the queue to new requests" : "Tap to reopen the queue"}
+                    </div>
+                  </div>
+                  <div style={{ width:44, height:24, borderRadius:12, background: settings.requestsOpen ? "var(--green)" : "var(--red)", position:"relative", transition:"background .2s", flexShrink:0 }}>
+                    <div style={{ position:"absolute", top:3, left: settings.requestsOpen ? 22 : 3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
+                  </div>
+                </div>
+
                 {queue.length === 0 ? (
                   <div style={{ textAlign:"center", color:"var(--muted)", padding:"60px 0", fontFamily:"var(--font-mono)" }}>Queue is empty</div>
                 ) : (
@@ -899,6 +953,22 @@
             {/* ── SETTINGS TAB ── */}
             {activeTab === "settings" && (
               <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+
+                {/* Requests Open/Closed */}
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                  <div>
+                    <div style={{ fontSize:14, fontWeight:600, color: settings.requestsOpen ? "var(--green)" : "var(--red)" }}>
+                      {settings.requestsOpen ? "🟢 Requests Open" : "🔴 Requests Closed"}
+                    </div>
+                    <div style={{ fontSize:11, color:"var(--muted)", marginTop:2 }}>Accept new song requests</div>
+                  </div>
+                  <div onClick={() => onSettingsChange(s => ({ ...s, requestsOpen: !s.requestsOpen }))}
+                    style={{ width:44, height:24, borderRadius:12, background: settings.requestsOpen ? "var(--green)" : "var(--red)", cursor:"pointer", position:"relative", transition:"background .2s" }}>
+                    <div style={{ position:"absolute", top:3, left: settings.requestsOpen ? 22 : 3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
+                  </div>
+                </div>
+
+                <div style={{ height:1, background:"var(--border)", margin:"4px 0" }} />
 
                 {/* Charity Mode */}
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
@@ -1060,6 +1130,7 @@
         bumpDownEnabled: true,
         requestCap: 0,
         showQR: true,
+        requestsOpen: true,
         paymentMethods: {
           venmo:   { enabled: true,  handle: "@InnerGrooveBrewing" },
           paypal:  { enabled: false, handle: "" },
@@ -1087,6 +1158,7 @@
         bumpDownEnabled: true,
         requestCap: 0,
         showQR: true,
+        requestsOpen: true,
         paymentMethods: {
           venmo:   { enabled: true,  handle: "@InnerGrooveBrewing" },
           paypal:  { enabled: false, handle: "" },
