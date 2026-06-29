@@ -53,44 +53,44 @@
   <div id="root"></div>
   <script type="text/babel">
     const { useState, useEffect, useCallback } = React;
- 
+
     const SUPABASE_URL  = "https://gyrfthjhacvoyhfilnjc.supabase.co";
     const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd5cmZ0aGpoYWN2b3loZmlsbmpjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwMTE1MjMsImV4cCI6MjA4ODU4NzUyM30.cI2df-xYe2X-LzC2L4mrtbuhWasAR7tAEOi9qSY9_rM";
     const VENMO_HANDLE  = "@InnerGrooveBrewing";
- 
+
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
- 
+
     function sortQueue(q) {
       const bumped = [...q.filter(s => s.bumped)].sort((a, b) => b.tip - a.tip);
       return [...bumped, ...q.filter(s => !s.bumped)];
     }
- 
+
     async function fetchQueue() {
       const { data } = await sb.from("dj_queue").select("*").order("order_index", { ascending: true }).order("created_at", { ascending: true });
       return data || [];
     }
- 
+
     async function fetchSettings() {
       const { data } = await sb.from("dj_settings").select("settings").eq("id", "singleton").single();
       return data ? data.settings : null;
     }
- 
+
     async function persistSettings(s) {
       await sb.from("dj_settings").update({ settings: s, updated_at: new Date().toISOString() }).eq("id", "singleton");
     }
- 
+
     // ── Patron View ────────────────────────────────────────────────────────────
     // ── Payment Screen ─────────────────────────────────────────────────────────
     function PaymentScreen({ amount, label, songTitle, action, paymentMethods, onDone }) {
       const pm = paymentMethods || {};
- 
+
       const actionLabel = action === "bump_up" ? "Bump Up" : action === "bury" ? "Bury It" : "Request";
       const note = action === "bump_up"
         ? `Bump+Up+${encodeURIComponent(songTitle)}`
         : action === "bury"
           ? `Bury+${encodeURIComponent(songTitle)}`
           : `DJ+${label}+for+${encodeURIComponent(songTitle)}`;
- 
+
       const methods = [
         pm.venmo?.enabled   && { key:"venmo",   label:"Venmo",   color:"#3d95ce", emoji:"💸", url:`https://venmo.com/${pm.venmo.handle.replace(/^@/,"")}?txn=pay&amount=${amount.toFixed(2)}&note=${note}` },
         pm.paypal?.enabled  && { key:"paypal",  label:"PayPal",  color:"#003087", emoji:"🅿️",  url:`https://www.paypal.com/paypalme/${pm.paypal.handle.replace(/^@/,"")}/${amount.toFixed(2)}` },
@@ -98,7 +98,7 @@
         pm.zelle?.enabled   && { key:"zelle",   label:"Zelle",   color:"#6d1ed4", emoji:"⚡", url:`https://enroll.zellepay.com/qr-codes?data=${encodeURIComponent(JSON.stringify({name:"Inner Groove Brewing",token:pm.zelle.handle}))}` },
         pm.cash?.enabled    && { key:"cash",    label:"Cash",    color:"#4a8a22", emoji:"🫙",  url:null },
       ].filter(Boolean);
- 
+
       return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:32, textAlign:"center" }}>
           <div style={{ fontFamily:"var(--font-display)", fontSize:52, color:"var(--green)", letterSpacing:6, animation:"pulse-green 3s ease-in-out infinite", lineHeight:1 }}>INNER GROOVE</div>
@@ -112,7 +112,7 @@
             {action === "request" ? " is in the queue." : " has been updated."}
             {amount > 0 && <> Send <strong style={{ color:"var(--gold)" }}>${amount.toFixed(2)}</strong> to complete your {label.toLowerCase()}!</>}
           </p>
- 
+
           {amount > 0 && methods.length > 0 && (
             <div style={{ width:"100%", maxWidth:340, display:"flex", flexDirection:"column", gap:10, marginBottom:20 }}>
               <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--muted)", letterSpacing:2, marginBottom:4 }}>HOW WOULD YOU LIKE TO PAY?</div>
@@ -137,7 +137,7 @@
               ))}
             </div>
           )}
- 
+
           <button onClick={onDone}
             style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:8, padding:"10px 24px", cursor:"pointer", fontSize:14, marginTop:8 }}>
             {action === "request" ? "Submit another request" : "← Back to queue"}
@@ -145,7 +145,7 @@
         </div>
       );
     }
- 
+
         function PatronView({ queue, onRefresh, settings, onSettingsChange }) {
       const [step, setStep]     = useState("form");
       const [song, setSong]     = useState("");
@@ -162,12 +162,12 @@
       const [actionName, setActionName]     = useState("");
       const [actionSaving, setActionSaving] = useState(false);
       const [pendingPayment, setPendingPayment] = useState(null);
- 
+
       const label = settings.charityMode ? "Donation" : settings.donationLabel;
       const allowFree = settings.charityMode ? false : settings.allowFree;
       const TIP_PRESETS = allowFree ? [0, 2, 5, 10] : [2, 5, 10];
       const tipAmt = parseFloat(tip) || 0;
- 
+
       async function handleBumpAction() {
         if (!actionName.trim()) return;
         const actionTipAmt = parseFloat(actionTip) || 0;
@@ -187,6 +187,7 @@
         // Log to donations_log
         await sb.from("donations_log").insert({
           id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          created_at: new Date().toISOString(),
           donor_name: actionName.trim(),
           amount: actionTipAmt,
           song_id: selectedSong.id,
@@ -207,7 +208,7 @@
         });
         setSelectedSong(null); setActionType(null); setActionTip(""); setActionName("");
       }
- 
+
       function handleSubmit() {
         if (!song.trim()) { setError("Song title is required."); return; }
         if (!name.trim()) { setError("Your name is required."); return; }
@@ -222,7 +223,7 @@
         }
         setError(""); setStep("confirm");
       }
- 
+
       async function handleConfirm() {
         setSaving(true);
         const { data: existing } = await sb.from("dj_queue").select("order_index").order("order_index", { ascending: false }).limit(1);
@@ -237,6 +238,7 @@
         if (!err && tipAmt > 0) {
           await sb.from("donations_log").insert({
             id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            created_at: new Date().toISOString(),
             donor_name: name.trim(), amount: tipAmt,
             song_id: newId, song_title: song.trim(),
             action: bump ? "bump_up" : "request",
@@ -250,14 +252,14 @@
         await onRefresh();
         setStep("payment");
       }
- 
+
       const inp = {
         background:"var(--surface)", border:"1px solid var(--border)",
         borderRadius:8, padding:"12px 16px", color:"var(--text)",
         fontSize:16, width:"100%", outline:"none",
         fontFamily:"'DM Sans', sans-serif",
       };
- 
+
       if (step === "payment") return (
         <PaymentScreen
           amount={tipAmt}
@@ -268,7 +270,7 @@
           onDone={() => { setSong(""); setArtist(""); setName(""); setTip(""); setBump(false); setMessage(""); setStep("form"); }}
         />
       );
- 
+
       if (step === "confirm") return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:24 }}>
           <div style={{ width:"100%", maxWidth:420, animation:"slide-up .3s ease" }}>
@@ -292,7 +294,7 @@
           </div>
         </div>
       );
- 
+
       return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", alignItems:"center", padding:"32px 20px" }}>
           <div style={{ textAlign:"center", marginBottom:28 }}>
@@ -300,7 +302,7 @@
             <div style={{ fontFamily:"var(--font-display)", fontSize:30, color:"var(--green-dim)", letterSpacing:8, marginTop:2, marginBottom:6 }}>BREWING</div>
             <div style={{ fontFamily:"var(--font-display)", fontSize:14, color:"var(--muted)", letterSpacing:6 }}>DJ REQUEST NIGHT</div>
           </div>
- 
+
           {/* Requests closed banner */}
           {!settings.requestsOpen && (
             <div style={{ width:"100%", maxWidth:420, marginBottom:20, background:"rgba(230,57,70,.1)", border:"2px solid var(--red)", borderRadius:14, padding:"20px 24px", textAlign:"center" }}>
@@ -332,7 +334,7 @@
               )}
             </div>
           )}
- 
+
           <div style={{ width:"100%", maxWidth:420, display:"flex", flexDirection:"column", gap:16, paddingBottom:80, opacity: settings.requestsOpen ? 1 : 0.3, pointerEvents: settings.requestsOpen ? "auto" : "none" }}>
             <div>
               <label style={{ display:"block", fontSize:11, letterSpacing:2, color:"var(--muted)", textTransform:"uppercase", marginBottom:6, fontFamily:"var(--font-mono)" }}>Song Title *</label>
@@ -419,7 +421,7 @@
                 {queue.length > 6 && <div style={{ fontSize:12, color:"var(--muted)", textAlign:"center", padding:"8px 0" }}>+{queue.length-6} more</div>}
               </div>
             )}
- 
+
             {/* Payment Screen for bump/bury */}
             {pendingPayment && (
               <div style={{ position:"fixed", inset:0, zIndex:9999, background:"var(--bg)" }}>
@@ -433,7 +435,7 @@
                 />
               </div>
             )}
- 
+
             {/* Bump/Bury Modal */}
             {selectedSong && (
               <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.8)", display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:9999, padding:"0 0 0 0" }}
@@ -442,7 +444,7 @@
                   <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color:"var(--muted)", letterSpacing:2, marginBottom:4 }}>SELECTED</div>
                   <div style={{ fontWeight:700, fontSize:18, marginBottom:4 }}>{selectedSong.song}</div>
                   <div style={{ fontSize:13, color:"var(--muted)", marginBottom:20 }}>{selectedSong.name}{selectedSong.artist?` · ${selectedSong.artist}`:""}</div>
- 
+
                   {!actionType ? (
                     <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                       {settings.bumpUpEnabled && (
@@ -511,17 +513,17 @@
         </div>
       );
     }
- 
+
     // ── QR Code Component ──────────────────────────────────────────────────────
     function QRCode({ url, size = 160 }) {
       const src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}&bgcolor=ffffff&color=0d0d0d&margin=10`;
       return <img src={src} alt="QR Code" style={{ width:size, height:size, borderRadius:8, display:"block" }} />;
     }
- 
+
         // ── Display View ───────────────────────────────────────────────────────────
     function DisplayView({ queue, leaderboard, settings, recentlyPlayed }) {
       const [time, setTime] = useState(new Date());
- 
+
       // Keep screen awake while display is active
       useEffect(() => {
         let wakeLock = null;
@@ -541,16 +543,16 @@
           if (wakeLock) wakeLock.release();
         };
       }, []);
- 
+
       useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
       const timeStr = time.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
- 
+
       const medals = ["🥇","🥈","🥉"];
- 
+
       return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", overflow:"hidden", position:"relative" }}>
           <div style={{ position:"fixed", inset:0, pointerEvents:"none", backgroundImage:"linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px)", backgroundSize:"60px 60px", opacity:.18 }} />
- 
+
           {/* Header */}
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"20px 48px", borderBottom:"2px solid var(--border)", background:"rgba(13,13,13,.9)", backdropFilter:"blur(10px)", position:"relative", zIndex:1 }}>
             <div style={{ display:"flex", alignItems:"center", gap:24 }}>
@@ -573,10 +575,10 @@
               </div>
             </div>
           </div>
- 
+
           {/* Body: queue + leaderboard side panel */}
           <div style={{ flex:1, display:"flex", gap:0, position:"relative", zIndex:1, overflow:"hidden" }}>
- 
+
             {/* Queue */}
             <div style={{ flex:1, padding:"36px 48px", overflowY:"auto" }}>
               {queue.length === 0 ? (
@@ -620,7 +622,7 @@
                 </div>
               )}
             </div>
- 
+
             {/* Leaderboard Side Panel */}
             <div style={{ width:280, borderLeft:"1px solid var(--border)", background:"rgba(13,13,13,.6)", backdropFilter:"blur(10px)", display:"flex", flexDirection:"column", padding:"28px 20px", overflowY:"auto" }}>
               {settings.showQR && (
@@ -655,7 +657,7 @@
               )}
             </div>
           </div>
- 
+
           {/* Ticker */}
           <div style={{ borderTop:"1px solid var(--border)", background:"rgba(109,193,53,.05)", padding:"12px 0", overflow:"hidden" }}>
             <div style={{ animation:"ticker 35s linear infinite", whiteSpace:"nowrap", display:"inline-block", fontFamily:"var(--font-mono)", fontSize:13, color:"var(--green)", letterSpacing:2 }}>
@@ -670,7 +672,7 @@
         </div>
       );
     }
- 
+
     // ── Admin View ─────────────────────────────────────────────────────────────
     function AdminView({ queue, onRefresh, settings, onSettingsChange, onRecentlyPlayed }) {
       const [pin, setPin]           = useState("");
@@ -689,12 +691,12 @@
         { id:"settings", label:"⚙️ Settings"  },
         { id:"payments", label:"💳 Payments"  },
       ];
- 
+
       // Keep localQueue in sync with incoming queue unless DJ is dragging
       useEffect(() => {
         if (dragIdx === null) setLocalQueue(queue);
       }, [queue, dragIdx]);
- 
+
       async function handleDrop(toIdx) {
         if (dragIdx === null || dragIdx === toIdx) return;
         const reordered = [...localQueue];
@@ -709,12 +711,12 @@
         );
         await onRefresh();
       }
- 
+
       function showToast(entry) {
         setToast(entry);
         setTimeout(() => setToast(t => t && t.id === entry.id ? null : t), 5000);
       }
- 
+
       async function markPlayed(entry) {
         await sb.from("dj_queue").delete().eq("id", entry.id);
         setPlayed(p => [entry, ...p]);
@@ -722,7 +724,7 @@
         await onRefresh();
         showToast(entry);
       }
- 
+
       async function restoreEntry(entry) {
         await sb.from("dj_queue").insert({
           id: entry.id, song: entry.song, artist: entry.artist,
@@ -732,19 +734,19 @@
         setToast(null);
         await onRefresh();
       }
- 
+
       async function removeEntry(id) {
         await sb.from("dj_queue").delete().eq("id", id);
         setConfirmDlg(null);
         await onRefresh();
       }
- 
+
       async function clearAll() {
         await sb.from("dj_queue").delete().neq("id", "");
         setConfirmDlg(null);
         await onRefresh();
       }
- 
+
       if (!authed) return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16 }}>
           <div style={{ textAlign:"center" }}>
@@ -763,10 +765,10 @@
           </button>
         </div>
       );
- 
+
       return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", paddingBottom:80 }}>
- 
+
           {/* Confirmation Dialog */}
           {confirmDlg && (
             <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:24 }}>
@@ -793,7 +795,7 @@
               </div>
             </div>
           )}
- 
+
           {/* Undo Toast */}
           {toast && (
             <div style={{
@@ -809,7 +811,7 @@
               </button>
             </div>
           )}
- 
+
           {/* Header */}
           <div style={{ background:"var(--surface)", borderBottom:"1px solid var(--border)", padding:"20px 24px 0" }}>
             <div style={{ maxWidth:640, margin:"0 auto" }}>
@@ -846,10 +848,10 @@
               </div>
             </div>
           </div>
- 
+
           {/* Tab Content */}
           <div style={{ maxWidth:640, margin:"0 auto", padding:"24px 24px 32px" }}>
- 
+
             {/* ── QUEUE TAB ── */}
             {activeTab === "queue" && (
               <div>
@@ -873,7 +875,7 @@
                     <div style={{ position:"absolute", top:3, left: settings.requestsOpen ? 22 : 3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
                   </div>
                 </div>
- 
+
                 {queue.length === 0 ? (
                   <div style={{ textAlign:"center", color:"var(--muted)", padding:"60px 0", fontFamily:"var(--font-mono)" }}>Queue is empty</div>
                 ) : (
@@ -917,7 +919,7 @@
                     ))}
                   </div>
                 )}
- 
+
                 {/* Recently Played */}
                 {played.length > 0 && (
                   <div>
@@ -949,11 +951,11 @@
                 )}
               </div>
             )}
- 
+
             {/* ── SETTINGS TAB ── */}
             {activeTab === "settings" && (
               <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
- 
+
                 {/* Requests Open/Closed */}
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                   <div>
@@ -967,9 +969,9 @@
                     <div style={{ position:"absolute", top:3, left: settings.requestsOpen ? 22 : 3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
                   </div>
                 </div>
- 
+
                 <div style={{ height:1, background:"var(--border)", margin:"4px 0" }} />
- 
+
                 {/* Charity Mode */}
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                   <div>
@@ -981,7 +983,7 @@
                     <div style={{ position:"absolute", top:3, left:settings.charityMode?22:3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
                   </div>
                 </div>
- 
+
                 {settings.charityMode && (
                   <div style={{ display:"flex", flexDirection:"column", gap:8, padding:"12px 16px", background:"rgba(245,200,66,.06)", border:"1px solid rgba(245,200,66,.3)", borderRadius:10 }}>
                     <input value={settings.charityName||""} onChange={e => onSettingsChange(s => ({ ...s, charityName: e.target.value }))}
@@ -996,9 +998,30 @@
                     </div>
                   </div>
                 )}
- 
+
                 <div style={{ height:1, background:"var(--border)", margin:"4px 0" }} />
- 
+
+                {/* Donation leaderboard reset — works in both tip and charity mode */}
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, padding:"12px 16px", background:"rgba(109,193,53,.05)", border:"1px solid var(--border)", borderRadius:10 }}>
+                  <div style={{ minWidth:0 }}>
+                    <div style={{ fontSize:14, color:"var(--text)", fontWeight:600 }}>🏆 Donation leaderboard</div>
+                    <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>Clears the Top Donors list on the Display for a new event. Past donations stay saved in the database.</div>
+                  </div>
+                  <button onClick={async () => {
+                      if (!confirm("Start a fresh leaderboard?\n\nThe Top Donors list on the Display will reset to empty for the new event. All past donations are kept in the database.")) return;
+                      const next = { ...settings, leaderboardResetAt: new Date().toISOString() };
+                      await persistSettings(next);
+                      onSettingsChange(() => next);
+                      await onRefresh();
+                      setToast("Leaderboard reset for a new event");
+                    }}
+                    style={{ background:"transparent", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:6, padding:"6px 14px", cursor:"pointer", fontSize:12, fontFamily:"var(--font-mono)", whiteSpace:"nowrap", flexShrink:0 }}>
+                    RESET
+                  </button>
+                </div>
+
+                <div style={{ height:1, background:"var(--border)", margin:"4px 0" }} />
+
                 {!settings.charityMode && (
                   <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                     <div style={{ fontSize:14, color:"var(--text)" }}>💰 Call it</div>
@@ -1012,7 +1035,7 @@
                     </div>
                   </div>
                 )}
- 
+
                 {!settings.charityMode && (
                   <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                     <div>
@@ -1025,7 +1048,7 @@
                     </div>
                   </div>
                 )}
- 
+
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                   <div>
                     <div style={{ fontSize:14, color:"var(--text)" }}>⬆️ Bump Up</div>
@@ -1036,7 +1059,7 @@
                     <div style={{ position:"absolute", top:3, left:settings.bumpUpEnabled?22:3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
                   </div>
                 </div>
- 
+
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                   <div>
                     <div style={{ fontSize:14, color:"var(--text)" }}>⬇️ Bump Down</div>
@@ -1047,7 +1070,7 @@
                     <div style={{ position:"absolute", top:3, left:settings.bumpDownEnabled?22:3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
                   </div>
                 </div>
- 
+
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                   <div>
                     <div style={{ fontSize:14, color:"var(--text)" }}>🔢 Request Limit per Person</div>
@@ -1061,7 +1084,7 @@
                       style={{ width:28, height:28, borderRadius:6, border:"1px solid var(--border)", background:"var(--card)", color:"var(--text)", cursor:"pointer", fontSize:16, fontWeight:700 }}>+</button>
                   </div>
                 </div>
- 
+
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                   <div>
                     <div style={{ fontSize:14, color:"var(--text)" }}>📱 Show QR Code on Display</div>
@@ -1072,10 +1095,10 @@
                     <div style={{ position:"absolute", top:3, left:settings.showQR?22:3, width:18, height:18, borderRadius:"50%", background:"#fff", transition:"left .2s" }} />
                   </div>
                 </div>
- 
+
               </div>
             )}
- 
+
             {/* ── PAYMENTS TAB ── */}
             {activeTab === "payments" && (
               <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
@@ -1106,12 +1129,12 @@
                 ))}
               </div>
             )}
- 
+
           </div>
         </div>
       );
     }
- 
+
     // ── Root App ───────────────────────────────────────────────────────────────
     function App() {
       const [queue, setQueue]       = useState([]);
@@ -1139,7 +1162,7 @@
           cash:    { enabled: true,  handle: "" },
         },
       });
- 
+
       function setSettings(updater) {
         setSettingsState(prev => {
           const next = typeof updater === "function" ? updater(prev) : updater;
@@ -1147,7 +1170,7 @@
           return next;
         });
       }
- 
+
       const DEFAULT_SETTINGS = {
         charityMode: false,
         charityName: "",
@@ -1167,19 +1190,33 @@
           cash:    { enabled: true,  handle: "" },
         },
       };
- 
+
       async function fetchLeaderboard() {
-        const { data } = await sb.from("donations_log").select("donor_name, amount");
+        // Read the "new event starts here" marker so the board only counts
+        // donations since the last reset. Past rows are kept in the database.
+        let resetAt = null;
+        try {
+          const { data: sRow } = await sb.from("dj_settings").select("settings").eq("id", "singleton").single();
+          resetAt = sRow && sRow.settings ? sRow.settings.leaderboardResetAt || null : null;
+        } catch (e) { /* no marker yet — count everything */ }
+        const cutoff = resetAt ? new Date(resetAt).getTime() : null;
+
+        const { data } = await sb.from("donations_log").select("*");
         if (!data) return [];
         const totals = {};
-        data.forEach(({ donor_name, amount }) => {
+        data.forEach(({ donor_name, amount, created_at }) => {
+          if (cutoff !== null) {
+            const t = created_at ? new Date(created_at).getTime() : 0;
+            if (t < cutoff) return; // donation predates the current event
+          }
+          if (!donor_name) return;
           if (!totals[donor_name]) totals[donor_name] = { donor_name, total: 0, count: 0 };
           totals[donor_name].total += parseFloat(amount) || 0;
           totals[donor_name].count += 1;
         });
         return Object.values(totals).sort((a, b) => b.total - a.total).slice(0, 10);
       }
- 
+
       const refresh = useCallback(async () => {
         const [q, lb, savedSettings] = await Promise.all([fetchQueue(), fetchLeaderboard(), fetchSettings()]);
         setQueue(sortQueue(q));
@@ -1191,11 +1228,11 @@
           }));
         }
       }, []);
- 
+
       useEffect(() => {
         refresh().then(() => setLoaded(true));
       }, []);
- 
+
       // Realtime subscription
       useEffect(() => {
         const channel = sb.channel("dj_queue_changes")
@@ -1203,13 +1240,13 @@
           .subscribe();
         return () => sb.removeChannel(channel);
       }, [refresh]);
- 
+
       if (!loaded) return (
         <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", alignItems:"center", justifyContent:"center" }}>
           <div style={{ width:40, height:40, border:"3px solid var(--border)", borderTopColor:"var(--green)", borderRadius:"50%", animation:"spin 1s linear infinite" }} />
         </div>
       );
- 
+
       return (
         <div style={{ minHeight:"100vh", background:"var(--bg)" }}>
           <div style={{
@@ -1234,9 +1271,8 @@
         </div>
       );
     }
- 
+
     ReactDOM.createRoot(document.getElementById("root")).render(<App />);
   </script>
 </body>
 </html>
- 
